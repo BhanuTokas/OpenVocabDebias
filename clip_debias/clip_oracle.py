@@ -17,8 +17,8 @@ import torch
 import torch.nn.functional as F
 from transformers import CLIPModel, CLIPProcessor
 
-
 # ── CLIP wrapper ──────────────────────────────────────────────────────────────
+
 
 class CLIPOracle:
     """
@@ -30,9 +30,7 @@ class CLIPOracle:
     """
 
     def __init__(self, model_name: str, device: str = "cuda"):
-        self.device = torch.device(
-            device if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.model = CLIPModel.from_pretrained(model_name).to(self.device)
         self.processor = CLIPProcessor.from_pretrained(model_name)
 
@@ -84,6 +82,7 @@ class CLIPOracle:
 
 # ── Concept direction ─────────────────────────────────────────────────────────
 
+
 def build_concept_direction(
     oracle: CLIPOracle,
     prompts_pos: List[str],
@@ -102,10 +101,10 @@ def build_concept_direction(
     -------
     v_t : (D,) unit vector on the CLIP text embedding sphere.
     """
-    v_pos = oracle.encode_text(prompts_pos).mean(dim=0)   # (D,)
-    v_neg = oracle.encode_text(prompts_neg).mean(dim=0)   # (D,)
+    v_pos = oracle.encode_text(prompts_pos).mean(dim=0)  # (D,)
+    v_neg = oracle.encode_text(prompts_neg).mean(dim=0)  # (D,)
     direction = v_pos - v_neg
-    return F.normalize(direction, dim=0)                  # (D,)
+    return F.normalize(direction, dim=0)  # (D,)
 
 
 def build_concept_direction_average(
@@ -120,12 +119,13 @@ def build_concept_direction_average(
     -------
     v_t : (D,) unit vector.
     """
-    embeddings = oracle.encode_text(prompts)   # (N, D)
-    mean_embed = embeddings.mean(dim=0)        # (D,)
+    embeddings = oracle.encode_text(prompts)  # (N, D)
+    mean_embed = embeddings.mean(dim=0)  # (D,)
     return F.normalize(mean_embed, dim=0)
 
 
 # ── Orthogonal projection ─────────────────────────────────────────────────────
+
 
 def orthogonal_project(
     v_i: torch.Tensor,
@@ -162,6 +162,7 @@ def orthogonal_project(
 
 # ── Convenience: compute targets for a batch ─────────────────────────────────
 
+
 @torch.no_grad()
 def compute_distillation_targets(
     oracle: CLIPOracle,
@@ -186,8 +187,8 @@ def compute_distillation_targets(
     -------
     targets : (B, D) distillation targets for the alignment loss
     """
-    v_i = oracle.encode_images(pixel_values)            # (B, D)
-    v_i_perp = orthogonal_project(v_i, v_t_hat)        # (B, D)
+    v_i = oracle.encode_images(pixel_values)  # (B, D)
+    v_i_perp = orthogonal_project(v_i, v_t_hat)  # (B, D)
     if renormalize:
         v_i_perp = F.normalize(v_i_perp, dim=-1)
     return v_i_perp

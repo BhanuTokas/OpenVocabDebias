@@ -12,8 +12,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 
-
 # ── Projection Head ───────────────────────────────────────────────────────────
+
 
 class ProjectionHead(nn.Module):
     """
@@ -33,15 +33,16 @@ class ProjectionHead(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.net(x)
-        return F.normalize(z, dim=-1)   # unit-norm for cosine arithmetic
+        return F.normalize(z, dim=-1)  # unit-norm for cosine arithmetic
 
 
 # ── Backbone helpers ──────────────────────────────────────────────────────────
 
+
 def _build_resnet50(num_classes: int):
     """ResNet-50 with the final FC replaced for num_classes."""
     backbone = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-    embed_dim = backbone.fc.in_features          # 2048
+    embed_dim = backbone.fc.in_features  # 2048
     backbone.fc = nn.Linear(embed_dim, num_classes)
     return backbone, embed_dim
 
@@ -55,6 +56,7 @@ def _build_vit_b16(num_classes: int):
 
 
 # ── Main model ────────────────────────────────────────────────────────────────
+
 
 class DebiasedClassifier(nn.Module):
     """
@@ -85,8 +87,10 @@ class DebiasedClassifier(nn.Module):
             # Hook target: the layer before the classification head
             self._hook_layer = self.backbone.encoder
         else:
-            raise ValueError(f"Unsupported backbone '{backbone_name}'. "
-                             "Choose 'resnet50' or 'vit_b_16'.")
+            raise ValueError(
+                f"Unsupported backbone '{backbone_name}'. "
+                "Choose 'resnet50' or 'vit_b_16'."
+            )
 
         self.proj_head = ProjectionHead(
             in_dim=embed_dim,
@@ -95,9 +99,7 @@ class DebiasedClassifier(nn.Module):
         )
 
         self._embed: torch.Tensor | None = None
-        self._hook_handle = self._hook_layer.register_forward_hook(
-            self._save_embed
-        )
+        self._hook_handle = self._hook_layer.register_forward_hook(self._save_embed)
 
     # ── Hook ──────────────────────────────────────────────────────────────────
 
@@ -117,13 +119,14 @@ class DebiasedClassifier(nn.Module):
     # ── Forward ───────────────────────────────────────────────────────────────
 
     def forward(self, x: torch.Tensor) -> dict:
-        logits = self.backbone(x)           # triggers the hook
-        embed = self._embed                 # (B, embed_dim)
-        proj = self.proj_head(embed)        # (B, clip_dim), unit-normalised
+        logits = self.backbone(x)  # triggers the hook
+        embed = self._embed  # (B, embed_dim)
+        proj = self.proj_head(embed)  # (B, clip_dim), unit-normalised
         return {"logits": logits, "embed": embed, "proj": proj}
 
 
 # ── Convenience factory ───────────────────────────────────────────────────────
+
 
 def build_model(cfg, num_classes: int = 2) -> DebiasedClassifier:
     return DebiasedClassifier(

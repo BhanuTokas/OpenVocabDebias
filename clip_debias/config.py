@@ -6,27 +6,37 @@ from typing import List
 class DebiasingConfig:
     # ── Dataset ───────────────────────────────────────────────────────────────
     celeba_root: str = "./data/celeba"
-    target_attr: str = "Attractive"       # classifier target (CelebA attribute)
-    concept_attr: str = "Male"            # concept to debias / probe
+    target_attr: str = "Attractive"  # classifier target (CelebA attribute)
+    concept_attr: str = "Male"  # concept to debias / probe
     batch_size: int = 64
     num_workers: int = 4
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    backbone: str = "resnet50"            # "resnet50" | "vit_b_16"
+    backbone: str = "resnet50"  # "resnet50" | "vit_b_16"
     clip_model: str = "openai/clip-vit-base-patch32"
     clip_embed_dim: int = 512
 
     # Projection head (E(x) → CLIP space)
     proj_hidden_dim: int = 1024
-    proj_out_dim: int = 512              # must match clip_embed_dim
+    proj_out_dim: int = 512  # must match clip_embed_dim
 
     # ── Concept prompts ───────────────────────────────────────────────────────
-    concept_prompts_pos: List[str] = field(default_factory=lambda: [
-        "a photo of a man", "a photo of a male person", "male", "a man",
-    ])
-    concept_prompts_neg: List[str] = field(default_factory=lambda: [
-        "a photo of a woman", "a photo of a female person", "female", "a woman",
-    ])
+    concept_prompts_pos: List[str] = field(
+        default_factory=lambda: [
+            "a photo of a man",
+            "a photo of a male person",
+            "male",
+            "a man",
+        ]
+    )
+    concept_prompts_neg: List[str] = field(
+        default_factory=lambda: [
+            "a photo of a woman",
+            "a photo of a female person",
+            "female",
+            "a woman",
+        ]
+    )
 
     # ── Training ──────────────────────────────────────────────────────────────
     epochs: int = 10
@@ -41,7 +51,7 @@ class DebiasingConfig:
 
     # ── Run identity ──────────────────────────────────────────────────────────
     # Set automatically by the training script; used for checkpoint naming.
-    run_name: str = "debias"             # e.g. "erm", "align_only", "full"
+    run_name: str = "debias"  # e.g. "erm", "align_only", "full"
     seed: int = 42
 
     # ── Misc ──────────────────────────────────────────────────────────────────
@@ -55,6 +65,7 @@ class DebiasingConfig:
 
 
 # ── Pre-defined ablation configurations ──────────────────────────────────────
+
 
 def erm_config(**overrides) -> DebiasingConfig:
     """Pure ERM baseline — no debiasing losses."""

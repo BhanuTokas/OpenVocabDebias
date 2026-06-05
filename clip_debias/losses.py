@@ -21,8 +21,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ── Individual loss terms ─────────────────────────────────────────────────────
+
 
 def task_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """Standard cross-entropy classification loss."""
@@ -64,10 +64,11 @@ def repulsion_loss(
     """
     # dot product per sample: (B,)
     dot = (proj * v_t_hat).sum(dim=-1)
-    return (dot ** 2).mean()
+    return (dot**2).mean()
 
 
 # ── Combined loss ─────────────────────────────────────────────────────────────
+
 
 class DebiasingLoss(nn.Module):
     """
@@ -87,11 +88,11 @@ class DebiasingLoss(nn.Module):
 
     def forward(
         self,
-        logits: torch.Tensor,                    # (B, num_classes)
-        labels: torch.Tensor,                    # (B,)
-        proj: torch.Tensor,                      # (B, D)  — P(E(x)), unit-normalised
-        v_i_perp: torch.Tensor | None = None,   # (B, D)  — distillation target
-        v_t_hat:  torch.Tensor | None = None,   # (D,)    — concept direction
+        logits: torch.Tensor,  # (B, num_classes)
+        labels: torch.Tensor,  # (B,)
+        proj: torch.Tensor,  # (B, D)  — P(E(x)), unit-normalised
+        v_i_perp: torch.Tensor | None = None,  # (B, D)  — distillation target
+        v_t_hat: torch.Tensor | None = None,  # (D,)    — concept direction
     ):
         """
         Returns
@@ -107,8 +108,16 @@ class DebiasingLoss(nn.Module):
         """
         l_task = task_loss(logits, labels)
 
-        l_align   = alignment_loss(proj, v_i_perp) if (self.lambda_align   > 0 and v_i_perp is not None) else torch.tensor(0.0)
-        l_repulse = repulsion_loss(proj, v_t_hat)  if (self.lambda_repulse > 0 and v_t_hat  is not None) else torch.tensor(0.0)
+        l_align = (
+            alignment_loss(proj, v_i_perp)
+            if (self.lambda_align > 0 and v_i_perp is not None)
+            else torch.tensor(0.0)
+        )
+        l_repulse = (
+            repulsion_loss(proj, v_t_hat)
+            if (self.lambda_repulse > 0 and v_t_hat is not None)
+            else torch.tensor(0.0)
+        )
 
         total = (
             self.lambda_task * l_task

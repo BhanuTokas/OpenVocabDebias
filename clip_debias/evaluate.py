@@ -25,8 +25,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from torch.cuda.amp import autocast
 
-
 # ── Feature extraction ────────────────────────────────────────────────────────
+
 
 @torch.no_grad()
 def extract_features(
@@ -60,15 +60,16 @@ def extract_features(
         all_concepts.append(concepts)
 
     return {
-        "embeds":   torch.cat(all_embeds).numpy(),
-        "projs":    torch.cat(all_projs).numpy(),
-        "preds":    torch.cat(all_preds).numpy(),
-        "targets":  torch.cat(all_targets).numpy(),
+        "embeds": torch.cat(all_embeds).numpy(),
+        "projs": torch.cat(all_projs).numpy(),
+        "preds": torch.cat(all_preds).numpy(),
+        "targets": torch.cat(all_targets).numpy(),
         "concepts": torch.cat(all_concepts).numpy(),
     }
 
 
 # ── Linear probe ─────────────────────────────────────────────────────────────
+
 
 def train_linear_probe(
     X_train: np.ndarray,
@@ -83,23 +84,24 @@ def train_linear_probe(
     """
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
-    X_test_s  = scaler.transform(X_test)
+    X_test_s = scaler.transform(X_test)
 
     clf = LogisticRegression(max_iter=max_iter, C=1.0, solver="lbfgs")
     clf.fit(X_train_s, y_train)
 
     return {
         "probe_train_acc": accuracy_score(y_train, clf.predict(X_train_s)),
-        "probe_test_acc":  accuracy_score(y_test,  clf.predict(X_test_s)),
+        "probe_test_acc": accuracy_score(y_test, clf.predict(X_test_s)),
     }
 
 
 # ── Worst-group accuracy ──────────────────────────────────────────────────────
 
+
 def worst_group_accuracy(
-    targets:  np.ndarray,
+    targets: np.ndarray,
     concepts: np.ndarray,
-    preds:    np.ndarray,
+    preds: np.ndarray,
 ) -> Tuple[Dict[Tuple[int, int], float], float]:
     """
     Compute per-group and worst-group accuracy over (target × concept) cells.
@@ -115,7 +117,7 @@ def worst_group_accuracy(
     group_accs : dict mapping (target_val, concept_val) → accuracy
     worst_acc  : float — minimum accuracy across all groups
     """
-    target_vals  = np.unique(targets)
+    target_vals = np.unique(targets)
     concept_vals = np.unique(concepts)
 
     group_accs: Dict[Tuple[int, int], float] = {}
@@ -133,6 +135,7 @@ def worst_group_accuracy(
 
 # ── Task accuracy (overall) ───────────────────────────────────────────────────
 
+
 @torch.no_grad()
 def evaluate_task(model, loader, device: str, use_amp: bool = True) -> float:
     """Return top-1 task accuracy over the loader."""
@@ -145,11 +148,12 @@ def evaluate_task(model, loader, device: str, use_amp: bool = True) -> float:
         with autocast(enabled=use_amp):
             out = model(images)
         correct += (out["logits"].argmax(1) == labels).sum().item()
-        total   += labels.size(0)
+        total += labels.size(0)
     return correct / total
 
 
 # ── Full evaluation suite ─────────────────────────────────────────────────────
+
 
 def run_evaluation(
     model,
@@ -178,13 +182,15 @@ def run_evaluation(
     train_feats = extract_features(model, train_loader, device, use_amp)
 
     print("  Extracting test features …")
-    test_feats  = extract_features(model, test_loader,  device, use_amp)
+    test_feats = extract_features(model, test_loader, device, use_amp)
 
     # ── 1. Concept probe ─────────────────────────────────────────────────────
     print("  Fitting concept probe on E(x) …")
     probe_metrics = train_linear_probe(
-        X_train=train_feats["embeds"], y_train=train_feats["concepts"],
-        X_test=test_feats["embeds"],   y_test=test_feats["concepts"],
+        X_train=train_feats["embeds"],
+        y_train=train_feats["concepts"],
+        X_test=test_feats["embeds"],
+        y_test=test_feats["concepts"],
     )
 
     # ── 2. Overall task accuracy ──────────────────────────────────────────────
@@ -200,19 +206,23 @@ def run_evaluation(
     # ── Assemble & print ──────────────────────────────────────────────────────
     metrics: Dict[str, float] = {
         **probe_metrics,
-        "task_test_acc":  task_acc,
+        "task_test_acc": task_acc,
         "worst_group_acc": worst_acc,
         **{f"group_acc_{k}": v for k, v in group_accs.items()},
     }
 
     print(f"\n  Results for '{label}':")
-    print(f"    Concept probe test acc  : {probe_metrics['probe_test_acc']:.4f}"
-          f"  (chance = 0.50)")
+    print(
+        f"    Concept probe test acc  : {probe_metrics['probe_test_acc']:.4f}"
+        f"  (chance = 0.50)"
+    )
     print(f"    Overall task acc (test) : {task_acc:.4f}")
     print(f"    Worst-group acc (test)  : {worst_acc:.4f}")
     print(f"    Per-group breakdown:")
     for (t, c), acc in sorted(group_accs.items()):
-        print(f"      target={t}, concept={c}  →  {acc:.4f}"
-              f"  (n={int(((test_feats['targets']==t)&(test_feats['concepts']==c)).sum())})")
+        print(
+            f"      target={t}, concept={c}  →  {acc:.4f}"
+            f"  (n={int(((test_feats['targets']==t)&(test_feats['concepts']==c)).sum())})"
+        )
 
     return metrics

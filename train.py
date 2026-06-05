@@ -30,8 +30,11 @@ import torch
 
 from clip_debias.clip_oracle import CLIPOracle, build_concept_direction
 from clip_debias.config import (
-    erm_config, align_only_config, repulse_only_config,
-    full_config, full_strong_config,
+    erm_config,
+    align_only_config,
+    repulse_only_config,
+    full_config,
+    full_strong_config,
 )
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
@@ -41,17 +44,18 @@ from clip_debias.trainer import Trainer
 # ── All available run configurations ─────────────────────────────────────────
 # Ordered so ERM always runs first (natural reference point).
 RUN_FACTORIES = {
-    "erm":          erm_config,
-    "align_only":   align_only_config,
+    "erm": erm_config,
+    "align_only": align_only_config,
     "repulse_only": repulse_only_config,
-    "full":         full_config,
-    "full_strong":  full_strong_config,
+    "full": full_config,
+    "full_strong": full_strong_config,
 }
 
 SEEDS = [42, 123, 456]
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -66,27 +70,32 @@ def parse_args():
         description="Multi-seed ablation grid for CLIP-guided debiasing"
     )
     parser.add_argument(
-        "--runs", nargs="+",
+        "--runs",
+        nargs="+",
         choices=list(RUN_FACTORIES),
         default=list(RUN_FACTORIES),
         help="Which run configurations to execute (default: all)",
     )
     parser.add_argument(
-        "--seeds", nargs="+", type=int, default=SEEDS,
+        "--seeds",
+        nargs="+",
+        type=int,
+        default=SEEDS,
         help="Random seeds to average over",
     )
-    parser.add_argument("--celeba_root",    default="./data/celeba")
-    parser.add_argument("--backbone",       default="resnet50")
-    parser.add_argument("--epochs",         type=int,   default=10)
-    parser.add_argument("--batch_size",     type=int,   default=64)
-    parser.add_argument("--lr",             type=float, default=1e-4)
+    parser.add_argument("--celeba_root", default="./data/celeba")
+    parser.add_argument("--backbone", default="resnet50")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--checkpoint_dir", default="./checkpoints")
-    parser.add_argument("--results_dir",    default="./results")
-    parser.add_argument("--no_amp",         action="store_true")
+    parser.add_argument("--results_dir", default="./results")
+    parser.add_argument("--no_amp", action="store_true")
     return parser.parse_args()
 
 
 # ── CSV logging ───────────────────────────────────────────────────────────────
+
 
 def append_result(path: str, row: dict):
     file_exists = os.path.isfile(path)
@@ -100,13 +109,12 @@ def append_result(path: str, row: dict):
 def print_summary(all_results: List[dict]):
     """Print mean ± std for each run name across seeds."""
     from collections import defaultdict
+
     grouped: Dict[str, List[dict]] = defaultdict(list)
     for r in all_results:
         grouped[r["run_name"]].append(r)
 
-    metric_keys = [
-        "probe_test_acc", "task_test_acc", "worst_group_acc"
-    ]
+    metric_keys = ["probe_test_acc", "task_test_acc", "worst_group_acc"]
 
     header = f"{'run':<16}" + "".join(f"  {k:<26}" for k in metric_keys)
     print(f"\n{'='*80}")
@@ -128,6 +136,7 @@ def print_summary(all_results: List[dict]):
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main():
     args = parse_args()
@@ -154,9 +163,11 @@ def main():
 
     print("\nBuilding dataloaders …")
     train_loader, val_loader, test_loader = build_dataloaders(ref_cfg)
-    print(f"  Train: {len(train_loader.dataset):,}  "
-          f"Val: {len(val_loader.dataset):,}  "
-          f"Test: {len(test_loader.dataset):,}")
+    print(
+        f"  Train: {len(train_loader.dataset):,}  "
+        f"Val: {len(val_loader.dataset):,}  "
+        f"Test: {len(test_loader.dataset):,}"
+    )
 
     # Load CLIP once — it's frozen and shared across all seeds and runs.
     # Skip if every requested run is ERM (CLIP not needed).
@@ -206,7 +217,7 @@ def main():
             print(f"  Trainable params: {n_params:,}")
 
             # Train
-            is_erm = (run_name == "erm")
+            is_erm = run_name == "erm"
             trainer = Trainer(
                 model=model,
                 cfg=cfg,
@@ -220,8 +231,11 @@ def main():
 
             # Evaluate
             metrics = run_evaluation(
-                model, train_loader, test_loader,
-                device, cfg.amp,
+                model,
+                train_loader,
+                test_loader,
+                device,
+                cfg.amp,
                 label=f"{run_name}  seed={seed}",
             )
 

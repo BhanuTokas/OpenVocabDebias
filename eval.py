@@ -34,7 +34,9 @@ def main():
     cfg.device = device
 
     train_loader, val_loader, test_loader = build_dataloaders(cfg)
-    split_loader = {"train": train_loader, "val": val_loader, "test": test_loader}[args.split]
+    split_loader = {"train": train_loader, "val": val_loader, "test": test_loader}[
+        args.split
+    ]
 
     model = build_model(cfg, num_classes=2)
     state = torch.load(args.checkpoint, map_location=device)
@@ -44,7 +46,9 @@ def main():
     model.load_state_dict(state)
     print(f"Loaded checkpoint: {args.checkpoint}")
 
-    run_evaluation(model, train_loader, split_loader, device, cfg.amp, label=args.checkpoint)
+    run_evaluation(
+        model, train_loader, split_loader, device, cfg.amp, label=args.checkpoint
+    )
 
 
 if __name__ == "__main__":
