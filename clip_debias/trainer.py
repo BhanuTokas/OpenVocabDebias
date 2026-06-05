@@ -1,5 +1,9 @@
 """
-trainer.py — Full training loop with AMP, checkpointing, and logging.
+trainer.py — Training loop with AMP, checkpointing, and ERM-mode support.
+
+The same Trainer class handles both ERM (lambda_align=0, lambda_repulse=0)
+and the full debiasing setup.  When both debiasing weights are zero, CLIP
+is never called, saving memory and time for the baseline run.
 """
 
 from __future__ import annotations
@@ -15,65 +19,74 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-from .clip_oracle import CLIPOracle, build_concept_direction, compute_distillation_targets
+from .clip_oracle import CLIPOracle, compute_distillation_targets
 from .clip_preprocess import RenormalizeForCLIP
 from .losses import DebiasingLoss
 from .models import DebiasedClassifier
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _accuracy(logits: torch.Tensor, labels: torch.Tensor) -> float:
     return (logits.argmax(dim=-1) == labels).float().mean().item()
 
 
-def _format_metrics(metrics: Dict[str, float]) -> str:
+def _fmt(metrics: Dict[str, float]) -> str:
     return "  ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
 
 
-# ── Trainer ───────────────────────────────────────────────────────────────────
-
 class Trainer:
     """
-    Encapsulates the debiasing training loop.
+    Unified trainer for ERM baseline and debiasing runs.
 
-    Parameters
-    ----------
-    model     : DebiasedClassifier
-    oracle    : CLIPOracle (frozen)
-    v_t_hat   : (D,) unit concept direction, pre-computed
-    cfg       : DebiasingConfig
+    ERM mode
+    --------
+    Set lambda_align=0 and lambda_repulse=0 in cfg (use erm_config()).
+    In this case oracle and v_t_hat may be passed as None — CLIP is
+    never called, keeping memory usage and wall time identical to a
+    plain fine-tuning run.
+
+    Debiasing mode
+    --------------
+    Pass a CLIPOracle and a pre-computed unit concept direction v_t_hat.
+    The combined loss (task + align + repulse) is used.
+
+    Checkpoints
+    -----------
+    Saved to <checkpoint_dir>/<run_name>/epoch_NN.pt.
+    Best val-acc model → <checkpoint_dir>/<run_name>/best.pt.
     """
 
     def __init__(
         self,
         model: DebiasedClassifier,
-        oracle: CLIPOracle,
-        v_t_hat: torch.Tensor,
         cfg,
+        oracle: CLIPOracle | None = None,
+        v_t_hat: torch.Tensor | None = None,
     ):
         self.model = model
-        self.oracle = oracle
-        self.v_t_hat = v_t_hat.to(cfg.device)
         self.cfg = cfg
         self.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
 
+        self._erm_mode = (cfg.lambda_align == 0.0 and cfg.lambda_repulse == 0.0)
+        if not self._erm_mode and (oracle is None or v_t_hat is None):
+            raise ValueError(
+                "oracle and v_t_hat are required when lambda_align or "
+                "lambda_repulse > 0.  Pass oracle=None only for ERM mode."
+            )
+
+        self.oracle = oracle
+        self.v_t_hat = v_t_hat.to(self.device) if v_t_hat is not None else None
+        self.renorm = RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
+
         self.criterion = DebiasingLoss(cfg)
-        self.renorm = RenormalizeForCLIP().to(self.device)
         self.scaler = GradScaler(enabled=cfg.amp)
-
-        # Only parameters in the backbone + projection head are trained.
-        # CLIP is frozen inside CLIPOracle.
         self.optimizer = AdamW(
-            self.model.parameters(),
-            lr=cfg.lr,
-            weight_decay=cfg.weight_decay,
+            model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
         )
-
-        # Scheduler is set up after we know the number of steps per epoch.
         self.scheduler: OneCycleLR | None = None
 
-        Path(cfg.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        # Per-run checkpoint subdirectory so runs don't overwrite each other
+        self.ckpt_dir = os.path.join(cfg.checkpoint_dir, cfg.run_name)
+        Path(self.ckpt_dir).mkdir(parents=True, exist_ok=True)
         self._best_val_acc = 0.0
 
     def _setup_scheduler(self, steps_per_epoch: int):
@@ -85,17 +98,19 @@ class Trainer:
             pct_start=self.cfg.warmup_epochs / self.cfg.epochs,
         )
 
-    # ── Single step ───────────────────────────────────────────────────────────
+    # ── Single training step ──────────────────────────────────────────────────
 
     def _train_step(self, images: torch.Tensor, labels: torch.Tensor):
         images = images.to(self.device)
         labels = labels.to(self.device)
 
-        # Compute distillation targets with frozen CLIP (no grad)
-        clip_images = self.renorm(images)
-        v_i_perp = compute_distillation_targets(
-            self.oracle, clip_images, self.v_t_hat, renormalize=True
-        )  # (B, D)
+        # Distillation targets — skipped entirely in ERM mode
+        v_i_perp = None
+        if not self._erm_mode:
+            clip_images = self.renorm(images)
+            v_i_perp = compute_distillation_targets(
+                self.oracle, clip_images, self.v_t_hat, renormalize=True
+            )
 
         with autocast(enabled=self.cfg.amp):
             out = self.model(images)
@@ -103,8 +118,8 @@ class Trainer:
                 logits=out["logits"],
                 labels=labels,
                 proj=out["proj"],
-                v_i_perp=v_i_perp,
-                v_t_hat=self.v_t_hat,
+                v_i_perp=v_i_perp,       # None is safe when weights are 0
+                v_t_hat=self.v_t_hat,    # None is safe when weights are 0
             )
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -116,89 +131,85 @@ class Trainer:
         if self.scheduler is not None:
             self.scheduler.step()
 
-        acc = _accuracy(out["logits"], labels)
-        return info, acc
+        return info, _accuracy(out["logits"], labels)
 
     # ── Validation ────────────────────────────────────────────────────────────
 
     @torch.no_grad()
-    def evaluate(self, loader) -> Dict[str, float]:
+    def _validate(self, loader) -> Dict[str, float]:
         self.model.eval()
-        total_correct = 0
-        total_samples = 0
-        total_loss = 0.0
-
+        total_loss = total_correct = total = 0
         for images, labels, _ in loader:
-            images = images.to(self.device)
-            labels = labels.to(self.device)
+            images, labels = images.to(self.device), labels.to(self.device)
             with autocast(enabled=self.cfg.amp):
                 out = self.model(images)
-                loss = torch.nn.functional.cross_entropy(out["logits"], labels)
-            total_loss += loss.item() * images.size(0)
+                loss = nn.functional.cross_entropy(out["logits"], labels)
+            total_loss    += loss.item() * images.size(0)
             total_correct += (out["logits"].argmax(1) == labels).sum().item()
-            total_samples += images.size(0)
-
+            total         += images.size(0)
         self.model.train()
-        return {
-            "val_loss": total_loss / total_samples,
-            "val_acc": total_correct / total_samples,
-        }
+        return {"val_loss": total_loss / total, "val_acc": total_correct / total}
 
     # ── Full training run ─────────────────────────────────────────────────────
 
-    def fit(self, train_loader, val_loader):
+    def fit(self, train_loader, val_loader) -> str:
+        """
+        Train for cfg.epochs epochs.
+
+        Returns
+        -------
+        best_ckpt_path : str — path to the best checkpoint (by val acc)
+        """
         self._setup_scheduler(len(train_loader))
-        self.model.to(self.device)
-        self.model.train()
+        self.model.to(self.device).train()
+
+        mode_str = "ERM" if self._erm_mode else (
+            f"debias  λ_align={self.cfg.lambda_align}  "
+            f"λ_repulse={self.cfg.lambda_repulse}"
+        )
+        print(f"\n[{self.cfg.run_name}]  seed={self.cfg.seed}  {mode_str}")
 
         for epoch in range(1, self.cfg.epochs + 1):
-            epoch_start = time.time()
-            running = {
-                "loss_task": 0.0,
-                "loss_align": 0.0,
-                "loss_repulse": 0.0,
-                "loss_total": 0.0,
-                "acc": 0.0,
-            }
-            n_steps = 0
+            t0 = time.time()
+            running = {k: 0.0 for k in
+                       ["loss_task", "loss_align", "loss_repulse", "loss_total", "acc"]}
+            n = 0
 
-            for step, (images, labels, _concept) in enumerate(train_loader, 1):
+            for step, (images, labels, _) in enumerate(train_loader, 1):
                 info, acc = self._train_step(images, labels)
                 for k in ["loss_task", "loss_align", "loss_repulse", "loss_total"]:
                     running[k] += info[k]
                 running["acc"] += acc
-                n_steps += 1
+                n += 1
 
                 if step % self.cfg.log_interval == 0:
-                    avg = {k: v / n_steps for k, v in running.items()}
-                    lr = self.optimizer.param_groups[0]["lr"]
-                    print(
-                        f"[Epoch {epoch}/{self.cfg.epochs}  step {step}/{len(train_loader)}]  "
-                        f"lr={lr:.2e}  " + _format_metrics(avg)
-                    )
+                    avg = {k: v / n for k, v in running.items()}
+                    lr  = self.optimizer.param_groups[0]["lr"]
+                    print(f"  [ep {epoch}/{self.cfg.epochs}  step {step}/{len(train_loader)}]"
+                          f"  lr={lr:.2e}  " + _fmt(avg))
 
-            # ── End of epoch ─────────────────────────────────────────────────
-            val_metrics = self.evaluate(val_loader)
-            elapsed = time.time() - epoch_start
-            avg = {k: v / n_steps for k, v in running.items()}
-            print(
-                f"\n=== Epoch {epoch} done ({elapsed:.1f}s) ===\n"
-                f"  Train — " + _format_metrics(avg) + "\n"
-                f"  Val   — " + _format_metrics(val_metrics) + "\n"
-            )
+            val = self._validate(val_loader)
+            avg = {k: v / n for k, v in running.items()}
+            print(f"\n  === Epoch {epoch} ({time.time()-t0:.1f}s) ===")
+            print(f"    train — " + _fmt(avg))
+            print(f"    val   — " + _fmt(val))
 
             # ── Checkpoint ───────────────────────────────────────────────────
-            val_acc = val_metrics["val_acc"]
-            ckpt_path = os.path.join(self.cfg.checkpoint_dir, f"epoch_{epoch:02d}.pt")
+            ckpt = os.path.join(self.ckpt_dir, f"epoch_{epoch:02d}.pt")
             torch.save({
                 "epoch": epoch,
                 "model_state": self.model.state_dict(),
                 "optimizer_state": self.optimizer.state_dict(),
-                "val_acc": val_acc,
-            }, ckpt_path)
+                "val_acc": val["val_acc"],
+                "run_name": self.cfg.run_name,
+                "seed": self.cfg.seed,
+            }, ckpt)
 
-            if val_acc > self._best_val_acc:
-                self._best_val_acc = val_acc
-                best_path = os.path.join(self.cfg.checkpoint_dir, "best.pt")
-                torch.save(self.model.state_dict(), best_path)
-                print(f"  ✓ New best val_acc={val_acc:.4f}  saved to {best_path}\n")
+            if val["val_acc"] > self._best_val_acc:
+                self._best_val_acc = val["val_acc"]
+                best = os.path.join(self.ckpt_dir, "best.pt")
+                torch.save(self.model.state_dict(), best)
+                print(f"    ✓ best val_acc={val['val_acc']:.4f}  → {best}")
+
+        print()
+        return os.path.join(self.ckpt_dir, "best.pt")

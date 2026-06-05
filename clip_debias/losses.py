@@ -87,21 +87,28 @@ class DebiasingLoss(nn.Module):
 
     def forward(
         self,
-        logits: torch.Tensor,          # (B, num_classes)
-        labels: torch.Tensor,          # (B,)
-        proj: torch.Tensor,            # (B, D)  — P(E(x)), unit-normalised
-        v_i_perp: torch.Tensor,        # (B, D)  — distillation target
-        v_t_hat: torch.Tensor,         # (D,)    — concept direction
+        logits: torch.Tensor,                    # (B, num_classes)
+        labels: torch.Tensor,                    # (B,)
+        proj: torch.Tensor,                      # (B, D)  — P(E(x)), unit-normalised
+        v_i_perp: torch.Tensor | None = None,   # (B, D)  — distillation target
+        v_t_hat:  torch.Tensor | None = None,   # (D,)    — concept direction
     ):
         """
         Returns
         -------
         total : scalar loss to call .backward() on
         info  : dict of individual (unweighted) loss values for logging
+
+        Notes
+        -----
+        v_i_perp and v_t_hat may be None when the corresponding lambda is 0
+        (ERM mode).  The zero-weight terms are skipped entirely to avoid
+        unnecessary computation and to keep ERM a true baseline.
         """
         l_task = task_loss(logits, labels)
-        l_align = alignment_loss(proj, v_i_perp)
-        l_repulse = repulsion_loss(proj, v_t_hat)
+
+        l_align   = alignment_loss(proj, v_i_perp) if (self.lambda_align   > 0 and v_i_perp is not None) else torch.tensor(0.0)
+        l_repulse = repulsion_loss(proj, v_t_hat)  if (self.lambda_repulse > 0 and v_t_hat  is not None) else torch.tensor(0.0)
 
         total = (
             self.lambda_task * l_task
