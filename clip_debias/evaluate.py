@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 
 # ── Feature extraction ────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ def extract_features(
 
     for images, labels, concepts in loader:
         images = images.to(device)
-        with autocast(enabled=use_amp):
+        with autocast("cuda" if torch.cuda.is_available() else "cpu", enabled=use_amp):
             out = model(images)
 
         all_embeds.append(out["embed"].cpu().float())
@@ -118,7 +118,7 @@ def evaluate_task(
     for images, labels, _concepts in loader:
         images = images.to(device)
         labels = labels.to(device)
-        with autocast(enabled=use_amp):
+        with autocast("cuda" if torch.cuda.is_available() else "cpu", enabled=use_amp):
             out = model(images)
         correct += (out["logits"].argmax(1) == labels).sum().item()
         total += labels.size(0)

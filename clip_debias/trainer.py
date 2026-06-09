@@ -11,7 +11,7 @@ from typing import Dict
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
@@ -57,10 +57,11 @@ class Trainer:
         self.v_t_hat = v_t_hat.to(cfg.device)
         self.cfg = cfg
         self.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+        self._device_type = self.device.type   # "cuda" or "cpu" — needed for amp API
 
         self.criterion = DebiasingLoss(cfg)
         self.renorm = RenormalizeForCLIP().to(self.device)
-        self.scaler = GradScaler(enabled=cfg.amp)
+        self.scaler = GradScaler(self._device_type, enabled=cfg.amp)
 
         # Only parameters in the backbone + projection head are trained.
         # CLIP is frozen inside CLIPOracle.
@@ -77,12 +78,16 @@ class Trainer:
         self._best_val_acc = 0.0
 
     def _setup_scheduler(self, steps_per_epoch: int):
+        total_steps = self.cfg.epochs * steps_per_epoch
+        # Cap pct_start so at least one step remains for the annealing phase.
+        pct_start = min(self.cfg.warmup_epochs / self.cfg.epochs,
+                        (total_steps - 1) / total_steps)
         self.scheduler = OneCycleLR(
             self.optimizer,
             max_lr=self.cfg.lr,
             epochs=self.cfg.epochs,
             steps_per_epoch=steps_per_epoch,
-            pct_start=self.cfg.warmup_epochs / self.cfg.epochs,
+            pct_start=pct_start,
         )
 
     # ── Single step ───────────────────────────────────────────────────────────
@@ -97,7 +102,7 @@ class Trainer:
             self.oracle, clip_images, self.v_t_hat, renormalize=True
         )  # (B, D)
 
-        with autocast(enabled=self.cfg.amp):
+        with autocast(self._device_type, enabled=self.cfg.amp):
             out = self.model(images)
             loss, info = self.criterion(
                 logits=out["logits"],
@@ -131,7 +136,7 @@ class Trainer:
         for images, labels, _ in loader:
             images = images.to(self.device)
             labels = labels.to(self.device)
-            with autocast(enabled=self.cfg.amp):
+            with autocast(self._device_type, enabled=self.cfg.amp):
                 out = self.model(images)
                 loss = torch.nn.functional.cross_entropy(out["logits"], labels)
             total_loss += loss.item() * images.size(0)
