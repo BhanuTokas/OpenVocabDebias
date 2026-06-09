@@ -219,3 +219,5 @@ __marimo__/
 
 # Project Specific
 checkpoints/
+scripts/slurm*
+results/
