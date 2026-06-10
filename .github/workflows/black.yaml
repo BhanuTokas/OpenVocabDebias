@@ -1,4 +1,4 @@
-name: Lint
+name: Lint Code
 
 on: [push, pull_request]
 
@@ -6,5 +6,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: psf/black@stable
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Run Black Formatter
+        uses: psf/black@stable
