@@ -80,12 +80,17 @@ class DebiasedClassifier(nn.Module):
 
         if backbone_name == "resnet50":
             self.backbone, embed_dim = _build_resnet50(num_classes)
-            # Hook target: avgpool output  (B, 2048, 1, 1) → squeezed to (B, 2048)
+            # Hook target: avgpool output  (B, 2048, 1, 1) → flattened to (B, 2048)
             self._hook_layer = self.backbone.avgpool
         elif backbone_name == "vit_b_16":
             self.backbone, embed_dim = _build_vit_b16(num_classes)
-            # Hook target: the layer before the classification head
-            self._hook_layer = self.backbone.encoder
+            # Hook target: ln (the LayerNorm after the transformer blocks, before
+            # the head).  torchvision's encoder returns a plain tensor of shape
+            # (B, num_patches+1, D); ln is applied to the full sequence and then
+            # the CLS token (index 0) is selected by the head.  Hooking ln gives
+            # us the full sequence as a plain tensor — no HuggingFace output
+            # objects involved.
+            self._hook_layer = self.backbone.encoder.ln
         else:
             raise ValueError(
                 f"Unsupported backbone '{backbone_name}'. "
@@ -104,13 +109,19 @@ class DebiasedClassifier(nn.Module):
     # ── Hook ──────────────────────────────────────────────────────────────────
 
     def _save_embed(self, module, input, output):
-        """Forward hook: store penultimate activations."""
-        if isinstance(output, torch.Tensor):
-            # ResNet: avgpool output is (B, C, 1, 1) — flatten to (B, C)
-            self._embed = output.flatten(1)
+        """Forward hook: store penultimate activations.
+
+        Both hooked layers (ResNet avgpool and ViT encoder.ln) return plain
+        tensors — no HuggingFace output objects involved.
+        ResNet avgpool : (B, C, 1, 1) — flatten to (B, C)
+        ViT encoder.ln : (B, num_patches+1, D) — take CLS token at index 0
+        """
+        if output.dim() == 4:
+            # ResNet avgpool: (B, C, 1, 1) -> (B, C)
+            self._embed = output.flatten(1).clone()
         else:
-            # ViT encoder returns a named tuple; CLS token is index 0
-            self._embed = output.last_hidden_state[:, 0]
+            # ViT encoder.ln: (B, num_patches+1, D) -> CLS token (B, D)
+            self._embed = output[:, 0].clone()
 
     def remove_hooks(self):
         """Call this if the model is no longer needed to free resources."""

@@ -107,8 +107,10 @@ class Trainer:
             weight_decay=cfg.weight_decay,
         )
 
-        # AMP scaler — shared across both backward passes
-        self.scaler = GradScaler(enabled=cfg.amp)
+        # Separate AMP scalers — one per optimizer to avoid in-place modification
+        # of gradients between the two backward passes invalidating the graph.
+        self.scaler_proj = GradScaler(enabled=cfg.amp)
+        self.scaler_backbone = GradScaler(enabled=cfg.amp)
 
         # Schedulers set up once we know steps_per_epoch
         self.scheduler_backbone: OneCycleLR | None = None
@@ -139,6 +141,11 @@ class Trainer:
         images = images.to(self.device)
         labels = labels.to(self.device)
 
+        # Zero both optimizers before the forward pass so no in-place grad
+        # modifications happen between the two backward passes on the retained graph.
+        self.optimizer_proj.zero_grad(set_to_none=True)
+        self.optimizer_backbone.zero_grad(set_to_none=True)
+
         # CLIP targets — skipped in ERM mode
         v_i = None  # full CLIP image embedding  (proj head target)
         v_i_perp = None  # concept-scrubbed embedding (backbone target)
@@ -156,20 +163,21 @@ class Trainer:
 
         info = {}
 
-        # ── Step 1: proj head — reconstruct V_I ──────────────────────────────
+        # ── Backward pass 1: proj head — accumulate gradients only ──────────
+        # Do NOT step the optimizer here — stepping updates weights in-place,
+        # incrementing their version and invalidating the retained graph before
+        # the backbone backward runs.
         if not self._erm_mode:
             with autocast(enabled=self.cfg.amp):
                 loss_proj, proj_info = self.proj_criterion(out["proj"], v_i)
 
-            self.optimizer_proj.zero_grad(set_to_none=True)
-            # retain_graph=True: backbone step still needs the graph
-            self.scaler.scale(loss_proj).backward(retain_graph=True)
-            self.scaler.unscale_(self.optimizer_proj)
-            nn.utils.clip_grad_norm_(self.model.proj_head.parameters(), max_norm=1.0)
-            self.scaler.step(self.optimizer_proj)
+            # retain_graph=True: backbone backward still needs the graph
+            self.scaler_proj.scale(loss_proj).backward(retain_graph=True)
             info.update(proj_info)
 
-        # ── Step 2: backbone — task + align + repulse ─────────────────────────
+        # ── Backward pass 2: backbone — accumulate gradients ─────────────────
+        # Graph is consumed here; both gradient sets now fully accumulated
+        # before any weights are touched.
         with autocast(enabled=self.cfg.amp):
             loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
@@ -179,21 +187,26 @@ class Trainer:
                 v_t_hat=self.v_t_hat,
             )
 
-        self.optimizer_backbone.zero_grad(set_to_none=True)
-        self.scaler.scale(loss_backbone).backward()
-        self.scaler.unscale_(self.optimizer_backbone)
-        nn.utils.clip_grad_norm_(self.model.backbone.parameters(), max_norm=1.0)
-        self.scaler.step(self.optimizer_backbone)
+        self.scaler_backbone.scale(loss_backbone).backward()
+        info.update(backbone_info)
 
-        # Scaler update once per step (after both optimizer steps)
-        self.scaler.update()
+        # ── Optimizer steps — both after all backward passes ─────────────────
+        if not self._erm_mode:
+            self.scaler_proj.unscale_(self.optimizer_proj)
+            nn.utils.clip_grad_norm_(self.model.proj_head.parameters(), max_norm=1.0)
+            self.scaler_proj.step(self.optimizer_proj)
+            self.scaler_proj.update()
+
+        self.scaler_backbone.unscale_(self.optimizer_backbone)
+        nn.utils.clip_grad_norm_(self.model.backbone.parameters(), max_norm=1.0)
+        self.scaler_backbone.step(self.optimizer_backbone)
+        self.scaler_backbone.update()
 
         if self.scheduler_backbone is not None:
             self.scheduler_backbone.step()
         if self.scheduler_proj is not None and not self._erm_mode:
             self.scheduler_proj.step()
 
-        info.update(backbone_info)
         return info, _accuracy(out["logits"], labels)
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -237,18 +250,14 @@ class Trainer:
         )
         print(f"\n[{self.cfg.run_name}]  seed={self.cfg.seed}  {mode_str}")
 
-        log_keys = (
-            ["loss_task", "loss_backbone", "acc"]
-            if self._erm_mode
-            else [
-                "loss_reconstruct",
-                "loss_task",
-                "loss_align",
-                "loss_repulse",
-                "loss_backbone",
-                "acc",
-            ]
-        )
+        log_keys = [
+            "loss_reconstruct",
+            "loss_task",
+            "loss_align",
+            "loss_repulse",
+            "loss_backbone",
+            "acc",
+        ]
 
         for epoch in range(1, self.cfg.epochs + 1):
             t0 = time.time()
