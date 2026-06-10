@@ -1,18 +1,26 @@
 """
-losses.py — Combined loss for concept-debiased representation learning.
+losses.py — Loss functions for dual-optimizer debiasing.
 
-Three terms
------------
-L_task     : cross-entropy  — preserves downstream classification accuracy
-L_align    : cosine distance between P(E(x)) and V_I_perp
-             — pulls the projected representation toward the scrubbed target
-L_repulse  : cosine similarity between P(E(x)) and V_T
-             — explicitly pushes away from the concept direction
-             (Note: if V_I_perp is well-estimated, L_align already implies
-             low concept alignment.  L_repulse adds an explicit gradient
-             signal and is weighted lower by default.)
+Two separate loss groups, each targeting a different set of parameters:
 
-Total loss = λ_task · L_task + λ_align · L_align + λ_repulse · L_repulse
+Proj head loss (L_reconstruct)
+-------------------------------
+L_reconstruct : 1 - cos(P(E(x)), V_I)
+    The projection head's only job is to reconstruct the original CLIP image
+    embedding as faithfully as possible.  No concept geometry here — that is
+    entirely the backbone's responsibility.
+
+Backbone loss (L_backbone)
+---------------------------
+L_task     : cross-entropy — preserve downstream classification accuracy
+L_align    : 1 - cos(P(E(x)), V_I_perp) — push P(E(x)) toward the
+             concept-scrubbed target.  Because the proj head is a faithful
+             CLIP reconstructor, the only way to satisfy this is for E(x)
+             itself to lose the concept component.
+L_repulse  : (P(E(x)) · V̂_T)² — directly penalise concept alignment in
+             the projected space, with gradient flowing only into the backbone.
+
+Total backbone loss = λ_task·L_task + λ_align·L_align + λ_repulse·L_repulse
 """
 
 from __future__ import annotations
@@ -29,19 +37,31 @@ def task_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, targets)
 
 
+def reconstruction_loss(
+    proj: torch.Tensor,
+    v_i: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Proj head loss: 1 - cos(P(E(x)), V_I).
+
+    Encourages the projection head to reconstruct the original (un-scrubbed)
+    CLIP image embedding.  Both inputs should be unit-normalised.
+    """
+    return (1.0 - F.cosine_similarity(proj, v_i, dim=-1)).mean()
+
+
 def alignment_loss(
     proj: torch.Tensor,
     v_i_perp: torch.Tensor,
 ) -> torch.Tensor:
     """
-    1 - cosine_similarity(P(E(x)), V_I_perp), averaged over the batch.
+    Backbone loss: 1 - cos(P(E(x)), V_I_perp).
 
-    Both inputs are expected to be (approximately) unit-normalised.
-    Cosine similarity ∈ [-1, 1], so the loss ∈ [0, 2].
+    Pushes the backbone to produce embeddings that, when projected by the
+    (reconstruction-trained) proj head, land near the concept-scrubbed target.
+    Both inputs should be unit-normalised.
     """
-    # cosine_similarity returns (B,)
-    cos_sim = F.cosine_similarity(proj, v_i_perp, dim=-1)
-    return (1.0 - cos_sim).mean()
+    return (1.0 - F.cosine_similarity(proj, v_i_perp, dim=-1)).mean()
 
 
 def repulsion_loss(
@@ -49,35 +69,38 @@ def repulsion_loss(
     v_t_hat: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Penalise cosine alignment of P(E(x)) with the concept direction V_T.
+    Backbone loss: mean( (P(E(x)) · V̂_T)² ).
 
-    We use the *squared* cosine similarity to penalise both positive and
-    negative correlations with the concept direction (the representation
-    should be truly orthogonal, not merely anti-correlated).
-
-        L_repulse = mean( (P(E(x)) · V_T_hat)^2 )
-
-    Parameters
-    ----------
-    proj    : (B, D) unit-normalised projected embeddings
-    v_t_hat : (D,)   unit concept direction
+    Penalises both positive and negative concept alignment in the projected
+    space.  Gradient flows only into the backbone (proj head is frozen for
+    this term via the dual-optimizer setup in trainer.py).
     """
-    # dot product per sample: (B,)
     dot = (proj * v_t_hat).sum(dim=-1)
     return (dot**2).mean()
 
 
-# ── Combined loss ─────────────────────────────────────────────────────────────
+# ── Loss group wrappers ───────────────────────────────────────────────────────
 
 
-class DebiasingLoss(nn.Module):
+class ProjHeadLoss(nn.Module):
     """
-    Wraps all three terms with configurable weights.
+    Loss for the projection head optimizer.
+    Reconstruction of the full CLIP image embedding V_I.
+    """
 
-    Usage
-    -----
-        criterion = DebiasingLoss(cfg)
-        loss, breakdown = criterion(logits, labels, proj, v_i_perp, v_t_hat)
+    def forward(
+        self,
+        proj: torch.Tensor,  # (B, D) P(E(x)), unit-normalised
+        v_i: torch.Tensor,  # (B, D) full CLIP image embedding, unit-normalised
+    ):
+        l = reconstruction_loss(proj, v_i)
+        return l, {"loss_reconstruct": l.item()}
+
+
+class BackboneLoss(nn.Module):
+    """
+    Loss for the backbone optimizer.
+    Task + alignment toward V_I_perp + repulsion from V̂_T.
     """
 
     def __init__(self, cfg):
@@ -90,22 +113,10 @@ class DebiasingLoss(nn.Module):
         self,
         logits: torch.Tensor,  # (B, num_classes)
         labels: torch.Tensor,  # (B,)
-        proj: torch.Tensor,  # (B, D)  — P(E(x)), unit-normalised
-        v_i_perp: torch.Tensor | None = None,  # (B, D)  — distillation target
-        v_t_hat: torch.Tensor | None = None,  # (D,)    — concept direction
+        proj: torch.Tensor,  # (B, D) P(E(x)), unit-normalised
+        v_i_perp: torch.Tensor | None = None,  # (B, D) concept-scrubbed target
+        v_t_hat: torch.Tensor | None = None,  # (D,)   unit concept direction
     ):
-        """
-        Returns
-        -------
-        total : scalar loss to call .backward() on
-        info  : dict of individual (unweighted) loss values for logging
-
-        Notes
-        -----
-        v_i_perp and v_t_hat may be None when the corresponding lambda is 0
-        (ERM mode).  The zero-weight terms are skipped entirely to avoid
-        unnecessary computation and to keep ERM a true baseline.
-        """
         l_task = task_loss(logits, labels)
 
         l_align = (
@@ -129,6 +140,6 @@ class DebiasingLoss(nn.Module):
             "loss_task": l_task.item(),
             "loss_align": l_align.item(),
             "loss_repulse": l_repulse.item(),
-            "loss_total": total.item(),
+            "loss_backbone": total.item(),
         }
         return total, info

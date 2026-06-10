@@ -1,9 +1,25 @@
 """
-trainer.py — Training loop with AMP, checkpointing, and ERM-mode support.
+trainer.py — Dual-optimizer training loop.
 
-The same Trainer class handles both ERM (lambda_align=0, lambda_repulse=0)
-and the full debiasing setup.  When both debiasing weights are zero, CLIP
-is never called, saving memory and time for the baseline run.
+Two optimizers with separate responsibilities:
+
+  optimizer_proj     — updates projection head only
+                       loss: L_reconstruct = 1 - cos(P(E(x)), V_I)
+                       goal: proj head becomes a faithful CLIP reconstructor
+
+  optimizer_backbone — updates backbone only
+                       loss: λ_task·L_task + λ_align·L_align + λ_repulse·L_repulse
+                       goal: backbone classifies correctly while removing concept
+
+In ERM mode (lambda_align=0, lambda_repulse=0) only optimizer_backbone is
+used and CLIP is never called, keeping ERM a clean matched baseline.
+
+Step order per batch
+--------------------
+1. Forward pass (single pass, graph retained)
+2. Proj head step  — backward on L_reconstruct, retain_graph=True
+3. Backbone step   — backward on L_backbone
+4. Both schedulers step
 """
 
 from __future__ import annotations
@@ -19,9 +35,13 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-from .clip_oracle import CLIPOracle, compute_distillation_targets
+from .clip_oracle import (
+    CLIPOracle,
+    build_concept_direction,
+    compute_distillation_targets,
+)
 from .clip_preprocess import RenormalizeForCLIP
-from .losses import DebiasingLoss
+from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
 
 
@@ -35,24 +55,14 @@ def _fmt(metrics: Dict[str, float]) -> str:
 
 class Trainer:
     """
-    Unified trainer for ERM baseline and debiasing runs.
+    Dual-optimizer trainer for ERM baseline and debiasing runs.
 
-    ERM mode
-    --------
-    Set lambda_align=0 and lambda_repulse=0 in cfg (use erm_config()).
-    In this case oracle and v_t_hat may be passed as None — CLIP is
-    never called, keeping memory usage and wall time identical to a
-    plain fine-tuning run.
-
-    Debiasing mode
-    --------------
-    Pass a CLIPOracle and a pre-computed unit concept direction v_t_hat.
-    The combined loss (task + align + repulse) is used.
-
-    Checkpoints
-    -----------
-    Saved to <checkpoint_dir>/<run_name>/epoch_NN.pt.
-    Best val-acc model → <checkpoint_dir>/<run_name>/best.pt.
+    Parameters
+    ----------
+    model    : DebiasedClassifier
+    cfg      : DebiasingConfig
+    oracle   : CLIPOracle (frozen); pass None for ERM mode
+    v_t_hat  : (D,) unit concept direction; pass None for ERM mode
     """
 
     def __init__(
@@ -79,27 +89,48 @@ class Trainer:
             RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
         )
 
-        self.criterion = DebiasingLoss(cfg)
-        self.scaler = GradScaler(enabled=cfg.amp)
-        self.optimizer = AdamW(
-            model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
-        )
-        self.scheduler: OneCycleLR | None = None
+        # ── Loss functions ────────────────────────────────────────────────────
+        self.backbone_criterion = BackboneLoss(cfg)
+        self.proj_criterion = ProjHeadLoss()
 
-        # Per-run checkpoint subdirectory so runs don't overwrite each other
+        # ── Optimizers ────────────────────────────────────────────────────────
+        # Backbone and proj head are updated by separate optimizers so that
+        # each loss only touches the parameters it is responsible for.
+        self.optimizer_backbone = AdamW(
+            model.backbone.parameters(),
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+        )
+        self.optimizer_proj = AdamW(
+            model.proj_head.parameters(),
+            lr=cfg.lr_proj,
+            weight_decay=cfg.weight_decay,
+        )
+
+        # AMP scaler — shared across both backward passes
+        self.scaler = GradScaler(enabled=cfg.amp)
+
+        # Schedulers set up once we know steps_per_epoch
+        self.scheduler_backbone: OneCycleLR | None = None
+        self.scheduler_proj: OneCycleLR | None = None
+
         self.ckpt_dir = os.path.join(
             cfg.checkpoint_dir, cfg.run_name, f"seed_{cfg.seed}"
         )
         Path(self.ckpt_dir).mkdir(parents=True, exist_ok=True)
         self._best_val_acc = 0.0
 
-    def _setup_scheduler(self, steps_per_epoch: int):
-        self.scheduler = OneCycleLR(
-            self.optimizer,
-            max_lr=self.cfg.lr,
+    def _setup_schedulers(self, steps_per_epoch: int):
+        common = dict(
             epochs=self.cfg.epochs,
             steps_per_epoch=steps_per_epoch,
             pct_start=self.cfg.warmup_epochs / self.cfg.epochs,
+        )
+        self.scheduler_backbone = OneCycleLR(
+            self.optimizer_backbone, max_lr=self.cfg.lr, **common
+        )
+        self.scheduler_proj = OneCycleLR(
+            self.optimizer_proj, max_lr=self.cfg.lr_proj, **common
         )
 
     # ── Single training step ──────────────────────────────────────────────────
@@ -108,33 +139,61 @@ class Trainer:
         images = images.to(self.device)
         labels = labels.to(self.device)
 
-        # Distillation targets — skipped entirely in ERM mode
-        v_i_perp = None
+        # CLIP targets — skipped in ERM mode
+        v_i = None  # full CLIP image embedding  (proj head target)
+        v_i_perp = None  # concept-scrubbed embedding (backbone target)
+
         if not self._erm_mode:
             clip_images = self.renorm(images)
+            with torch.no_grad():
+                v_i = self.oracle.encode_images(clip_images)  # (B, D)
             v_i_perp = compute_distillation_targets(
                 self.oracle, clip_images, self.v_t_hat, renormalize=True
-            )
+            )  # (B, D)
 
         with autocast(enabled=self.cfg.amp):
-            out = self.model(images)
-            loss, info = self.criterion(
+            out = self.model(images)  # logits, embed, proj
+
+        info = {}
+
+        # ── Step 1: proj head — reconstruct V_I ──────────────────────────────
+        if not self._erm_mode:
+            with autocast(enabled=self.cfg.amp):
+                loss_proj, proj_info = self.proj_criterion(out["proj"], v_i)
+
+            self.optimizer_proj.zero_grad(set_to_none=True)
+            # retain_graph=True: backbone step still needs the graph
+            self.scaler.scale(loss_proj).backward(retain_graph=True)
+            self.scaler.unscale_(self.optimizer_proj)
+            nn.utils.clip_grad_norm_(self.model.proj_head.parameters(), max_norm=1.0)
+            self.scaler.step(self.optimizer_proj)
+            info.update(proj_info)
+
+        # ── Step 2: backbone — task + align + repulse ─────────────────────────
+        with autocast(enabled=self.cfg.amp):
+            loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
                 labels=labels,
                 proj=out["proj"],
-                v_i_perp=v_i_perp,  # None is safe when weights are 0
-                v_t_hat=self.v_t_hat,  # None is safe when weights are 0
+                v_i_perp=v_i_perp,
+                v_t_hat=self.v_t_hat,
             )
 
-        self.optimizer.zero_grad(set_to_none=True)
-        self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.optimizer)
-        nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        if self.scheduler is not None:
-            self.scheduler.step()
+        self.optimizer_backbone.zero_grad(set_to_none=True)
+        self.scaler.scale(loss_backbone).backward()
+        self.scaler.unscale_(self.optimizer_backbone)
+        nn.utils.clip_grad_norm_(self.model.backbone.parameters(), max_norm=1.0)
+        self.scaler.step(self.optimizer_backbone)
 
+        # Scaler update once per step (after both optimizer steps)
+        self.scaler.update()
+
+        if self.scheduler_backbone is not None:
+            self.scheduler_backbone.step()
+        if self.scheduler_proj is not None and not self._erm_mode:
+            self.scheduler_proj.step()
+
+        info.update(backbone_info)
         return info, _accuracy(out["logits"], labels)
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -162,9 +221,9 @@ class Trainer:
 
         Returns
         -------
-        best_ckpt_path : str — path to the best checkpoint (by val acc)
+        best_ckpt_path : str
         """
-        self._setup_scheduler(len(train_loader))
+        self._setup_schedulers(len(train_loader))
         self.model.to(self.device).train()
 
         mode_str = (
@@ -172,37 +231,45 @@ class Trainer:
             if self._erm_mode
             else (
                 f"debias  λ_align={self.cfg.lambda_align}  "
-                f"λ_repulse={self.cfg.lambda_repulse}"
+                f"λ_repulse={self.cfg.lambda_repulse}  "
+                f"lr={self.cfg.lr}  lr_proj={self.cfg.lr_proj}"
             )
         )
         print(f"\n[{self.cfg.run_name}]  seed={self.cfg.seed}  {mode_str}")
 
+        log_keys = (
+            ["loss_task", "loss_backbone", "acc"]
+            if self._erm_mode
+            else [
+                "loss_reconstruct",
+                "loss_task",
+                "loss_align",
+                "loss_repulse",
+                "loss_backbone",
+                "acc",
+            ]
+        )
+
         for epoch in range(1, self.cfg.epochs + 1):
             t0 = time.time()
-            running = {
-                k: 0.0
-                for k in [
-                    "loss_task",
-                    "loss_align",
-                    "loss_repulse",
-                    "loss_total",
-                    "acc",
-                ]
-            }
+            running = {k: 0.0 for k in log_keys}
             n = 0
 
             for step, (images, labels, _) in enumerate(train_loader, 1):
                 info, acc = self._train_step(images, labels)
-                for k in ["loss_task", "loss_align", "loss_repulse", "loss_total"]:
-                    running[k] += info[k]
-                running["acc"] += acc
+                for k in log_keys:
+                    if k == "acc":
+                        running["acc"] += acc
+                    elif k in info:
+                        running[k] += info[k]
                 n += 1
 
                 if step % self.cfg.log_interval == 0:
                     avg = {k: v / n for k, v in running.items()}
-                    lr = self.optimizer.param_groups[0]["lr"]
+                    lr = self.optimizer_backbone.param_groups[0]["lr"]
                     print(
-                        f"  [ep {epoch}/{self.cfg.epochs}  step {step}/{len(train_loader)}]"
+                        f"  [ep {epoch}/{self.cfg.epochs}  "
+                        f"step {step}/{len(train_loader)}]"
                         f"  lr={lr:.2e}  " + _fmt(avg)
                     )
 
@@ -212,13 +279,13 @@ class Trainer:
             print(f"    train — " + _fmt(avg))
             print(f"    val   — " + _fmt(val))
 
-            # ── Checkpoint ───────────────────────────────────────────────────
             ckpt = os.path.join(self.ckpt_dir, f"epoch_{epoch:02d}.pt")
             torch.save(
                 {
                     "epoch": epoch,
                     "model_state": self.model.state_dict(),
-                    "optimizer_state": self.optimizer.state_dict(),
+                    "opt_backbone": self.optimizer_backbone.state_dict(),
+                    "opt_proj": self.optimizer_proj.state_dict(),
                     "val_acc": val["val_acc"],
                     "run_name": self.cfg.run_name,
                     "seed": self.cfg.seed,

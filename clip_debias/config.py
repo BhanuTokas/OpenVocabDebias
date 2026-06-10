@@ -40,18 +40,18 @@ class DebiasingConfig:
 
     # ── Training ──────────────────────────────────────────────────────────────
     epochs: int = 10
-    lr: float = 1e-4
+    lr: float = 1e-4  # backbone learning rate
+    lr_proj: float = 1e-3  # proj head learning rate (simpler task → higher LR)
     weight_decay: float = 1e-4
     warmup_epochs: int = 1
 
-    # Loss weights (set lambda_align=0, lambda_repulse=0 for ERM baseline)
+    # Backbone loss weights (set lambda_align=0, lambda_repulse=0 for ERM baseline)
     lambda_task: float = 1.0
     lambda_align: float = 1.0
     lambda_repulse: float = 0.5
 
     # ── Run identity ──────────────────────────────────────────────────────────
-    # Set automatically by the training script; used for checkpoint naming.
-    run_name: str = "debias"  # e.g. "erm", "align_only", "full"
+    run_name: str = "debias"
     seed: int = 42
 
     # ── Misc ──────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ class DebiasingConfig:
 
 
 def erm_config(**overrides) -> DebiasingConfig:
-    """Pure ERM baseline — no debiasing losses."""
+    """Pure ERM baseline — no debiasing losses, no proj head optimizer."""
     cfg = DebiasingConfig(
         run_name="erm",
         lambda_task=1.0,
@@ -81,7 +81,7 @@ def erm_config(**overrides) -> DebiasingConfig:
 
 
 def align_only_config(**overrides) -> DebiasingConfig:
-    """Ablation: alignment loss only, no repulsion."""
+    """Ablation: backbone alignment loss only, no repulsion."""
     cfg = DebiasingConfig(
         run_name="align_only",
         lambda_task=1.0,
@@ -94,7 +94,7 @@ def align_only_config(**overrides) -> DebiasingConfig:
 
 
 def repulse_only_config(**overrides) -> DebiasingConfig:
-    """Ablation: repulsion loss only, no alignment."""
+    """Ablation: repulsion only, no alignment."""
     cfg = DebiasingConfig(
         run_name="repulse_only",
         lambda_task=1.0,
@@ -107,7 +107,7 @@ def repulse_only_config(**overrides) -> DebiasingConfig:
 
 
 def full_config(**overrides) -> DebiasingConfig:
-    """Full method: task + align + repulse."""
+    """Full method: task + align + repulse on backbone, reconstruction on proj head."""
     cfg = DebiasingConfig(
         run_name="full",
         lambda_task=1.0,
