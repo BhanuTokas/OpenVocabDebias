@@ -144,7 +144,7 @@ class Trainer:
         self.optimizer_backbone.zero_grad(set_to_none=True)
 
         # CLIP targets — skipped in ERM mode
-        v_i = None      # full CLIP image embedding  (proj head target)
+        v_i = None  # full CLIP image embedding  (proj head target)
         v_i_perp = None  # concept-scrubbed embedding (backbone target)
 
         if not self._erm_mode:
