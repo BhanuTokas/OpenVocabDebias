@@ -250,14 +250,18 @@ class Trainer:
         )
         print(f"\n[{self.cfg.run_name}]  seed={self.cfg.seed}  {mode_str}")
 
-        log_keys = [
-            "loss_reconstruct",
-            "loss_task",
-            "loss_align",
-            "loss_repulse",
-            "loss_backbone",
-            "acc",
-        ]
+        log_keys = (
+            ["loss_task", "loss_backbone", "acc"]
+            if self._erm_mode
+            else [
+                "loss_reconstruct",
+                "loss_task",
+                "loss_align",
+                "loss_repulse",
+                "loss_backbone",
+                "acc",
+            ]
+        )
 
         for epoch in range(1, self.cfg.epochs + 1):
             t0 = time.time()
