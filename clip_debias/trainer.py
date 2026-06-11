@@ -16,10 +16,12 @@ used and CLIP is never called, keeping ERM a clean matched baseline.
 
 Step order per batch
 --------------------
-1. Forward pass (single pass, graph retained)
-2. Proj head step  — backward on L_reconstruct, retain_graph=True
-3. Backbone step   — backward on L_backbone
-4. Both schedulers step
+1. Forward pass (single pass)
+2. Backbone backward — uses out["proj"] from the original graph; proj_head.params
+   accumulate contamination grads from L_align/L_repulse flowing through it.
+3. Zero proj_head.params.grad — discard contamination before the proj backward.
+4. Proj backward — fresh graph via proj_head(embed.detach()); backbone untouched.
+5. Both optimizer steps (proj then backbone), both scheduler steps.
 """
 
 from __future__ import annotations
@@ -31,15 +33,12 @@ from typing import Dict
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-from .clip_oracle import (
-    CLIPOracle,
-    build_concept_direction,
-    compute_distillation_targets,
-)
+from .clip_oracle import CLIPOracle, orthogonal_project
 from .clip_preprocess import RenormalizeForCLIP
 from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
@@ -107,10 +106,10 @@ class Trainer:
             weight_decay=cfg.weight_decay,
         )
 
-        # Separate AMP scalers — one per optimizer to avoid in-place modification
-        # of gradients between the two backward passes invalidating the graph.
-        self.scaler_proj = GradScaler(enabled=cfg.amp)
-        self.scaler_backbone = GradScaler(enabled=cfg.amp)
+        # Separate AMP scalers — one per optimizer to avoid cross-scaler inf
+        # tracking conflicts between the two backward passes.
+        self.scaler_proj = GradScaler("cuda", enabled=cfg.amp)
+        self.scaler_backbone = GradScaler("cuda", enabled=cfg.amp)
 
         # Schedulers set up once we know steps_per_epoch
         self.scheduler_backbone: OneCycleLR | None = None
@@ -141,44 +140,30 @@ class Trainer:
         images = images.to(self.device)
         labels = labels.to(self.device)
 
-        # Zero both optimizers before the forward pass so no in-place grad
-        # modifications happen between the two backward passes on the retained graph.
         self.optimizer_proj.zero_grad(set_to_none=True)
         self.optimizer_backbone.zero_grad(set_to_none=True)
 
         # CLIP targets — skipped in ERM mode
-        v_i = None  # full CLIP image embedding  (proj head target)
+        v_i = None      # full CLIP image embedding  (proj head target)
         v_i_perp = None  # concept-scrubbed embedding (backbone target)
 
         if not self._erm_mode:
             clip_images = self.renorm(images)
             with torch.no_grad():
                 v_i = self.oracle.encode_images(clip_images)  # (B, D)
-            v_i_perp = compute_distillation_targets(
-                self.oracle, clip_images, self.v_t_hat, renormalize=True
-            )  # (B, D)
+                v_i_perp = F.normalize(
+                    orthogonal_project(v_i, self.v_t_hat), dim=-1
+                )  # (B, D)
 
-        with autocast(enabled=self.cfg.amp):
+        with autocast("cuda", enabled=self.cfg.amp):
             out = self.model(images)  # logits, embed, proj
 
         info = {}
 
-        # ── Backward pass 1: proj head — accumulate gradients only ──────────
-        # Do NOT step the optimizer here — stepping updates weights in-place,
-        # incrementing their version and invalidating the retained graph before
-        # the backbone backward runs.
-        if not self._erm_mode:
-            with autocast(enabled=self.cfg.amp):
-                loss_proj, proj_info = self.proj_criterion(out["proj"], v_i)
-
-            # retain_graph=True: backbone backward still needs the graph
-            self.scaler_proj.scale(loss_proj).backward(retain_graph=True)
-            info.update(proj_info)
-
-        # ── Backward pass 2: backbone — accumulate gradients ─────────────────
-        # Graph is consumed here; both gradient sets now fully accumulated
-        # before any weights are touched.
-        with autocast(enabled=self.cfg.amp):
+        # ── Backward pass 1: backbone ─────────────────────────────────────────
+        # Graph is consumed here.  L_align/L_repulse flow through out["proj"]
+        # → proj_head, leaving contamination grads on proj_head.params.
+        with autocast("cuda", enabled=self.cfg.amp):
             loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
                 labels=labels,
@@ -189,6 +174,21 @@ class Trainer:
 
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
+
+        # ── Backward pass 2: proj head ────────────────────────────────────────
+        # Zero contamination grads before the proj backward so only
+        # L_reconstruct grads remain on proj_head.params after this pass.
+        # Uses a fresh graph (embed.detach()) — backbone params untouched.
+        if not self._erm_mode:
+            for p in self.model.proj_head.parameters():
+                p.grad = None
+
+            with autocast("cuda", enabled=self.cfg.amp):
+                proj_for_loss = self.model.proj_head(out["embed"].detach())
+                loss_proj, proj_info = self.proj_criterion(proj_for_loss, v_i)
+
+            self.scaler_proj.scale(loss_proj).backward()
+            info.update(proj_info)
 
         # ── Optimizer steps — both after all backward passes ─────────────────
         if not self._erm_mode:
@@ -217,7 +217,7 @@ class Trainer:
         total_loss = total_correct = total = 0
         for images, labels, _ in loader:
             images, labels = images.to(self.device), labels.to(self.device)
-            with autocast(enabled=self.cfg.amp):
+            with autocast("cuda", enabled=self.cfg.amp):
                 out = self.model(images)
                 loss = nn.functional.cross_entropy(out["logits"], labels)
             total_loss += loss.item() * images.size(0)
