@@ -11,3 +11,10 @@ jobs:
 
       - name: Run Black Formatter
         uses: psf/black@stable
+        with:
+          options: ""
+
+      - name: Commit formatted changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-format with Black"
