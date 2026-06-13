@@ -125,6 +125,8 @@ class DebiasingConfig:
     lambda_task: float = 1.0
     lambda_align: float = 1.0
     lambda_repulse: float = 0.5
+    lambda_task_warmup: bool = True            # ramp lambda_task up from calibrated init
+    lambda_task_warmup_schedule: str = "cosine"  # "linear" | "cosine"
 
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"

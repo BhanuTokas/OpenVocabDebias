@@ -26,6 +26,7 @@ Step order per batch
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
@@ -116,6 +117,12 @@ class Trainer:
         self.scheduler_backbone: OneCycleLR | None = None
         self.scheduler_proj: OneCycleLR | None = None
 
+        # ── lambda_task warmup schedule ───────────────────────────────────────
+        self._global_step: int = 0
+        self._lambda_task_warmup_steps: int = 0       # set in _setup_schedulers
+        self._lambda_task_0: float = cfg.lambda_task  # overwritten by _calibrate
+        self._lambda_task_target: float = cfg.lambda_task
+
         self.ckpt_dir = os.path.join(
             cfg.checkpoint_dir, cfg.run_name, f"seed_{cfg.seed}"
         )
@@ -138,6 +145,74 @@ class Trainer:
         self.scheduler_proj = OneCycleLR(
             self.optimizer_proj, max_lr=self.cfg.lr_proj, **common
         )
+
+        if not self._erm_mode and self.cfg.lambda_task_warmup:
+            self._lambda_task_warmup_steps = total_steps // 2
+
+    # ── lambda_task warmup ────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def _calibrate_lambda_task(self, first_batch):
+        """
+        Single no-grad forward pass to set _lambda_task_0 such that
+        lambda_task_0 * l_task_init ≈ min(active debiasing losses).
+        """
+        if self._erm_mode or not self.cfg.lambda_task_warmup:
+            return
+
+        images, labels, _ = first_batch
+        images, labels = images.to(self.device), labels.to(self.device)
+
+        clip_images = self.renorm(images)
+        v_i = self.oracle.encode_images(clip_images)
+        v_i_perp = F.normalize(orthogonal_project(v_i, self.v_t_hat), dim=-1)
+
+        with autocast(self._device_type, enabled=self.cfg.amp):
+            out = self.model(images)
+            _, info = self.backbone_criterion(
+                logits=out["logits"],
+                labels=labels,
+                proj=out["proj"],
+                v_i_perp=v_i_perp,
+                v_t_hat=self.v_t_hat,
+            )
+
+        l_task = info["loss_task"]
+        active = [
+            info[k]
+            for k, lam in [
+                ("loss_align", self.cfg.lambda_align),
+                ("loss_repulse", self.cfg.lambda_repulse),
+            ]
+            if lam > 0
+        ]
+
+        if not active or l_task < 1e-8:
+            print("  [lambda_task warmup] calibration skipped (no active debiasing or l_task≈0)")
+            return
+
+        debias_ref = min(active)
+        self._lambda_task_0 = debias_ref / l_task
+        print(
+            f"  [lambda_task warmup] schedule={self.cfg.lambda_task_warmup_schedule}"
+            f"  l_task_init={l_task:.4f}  debias_ref={debias_ref:.4f}"
+            f"  lambda_task_0={self._lambda_task_0:.4f}"
+            f"  → {self._lambda_task_target:.4f} over {self._lambda_task_warmup_steps} steps"
+        )
+
+    def _current_lambda_task(self) -> float:
+        if self._erm_mode or not self.cfg.lambda_task_warmup:
+            return self._lambda_task_target
+        schedule = self.cfg.lambda_task_warmup_schedule
+        if schedule not in ("linear", "cosine"):
+            raise ValueError(f"Unknown lambda_task_warmup_schedule: {schedule!r}")
+        ws = self._lambda_task_warmup_steps
+        if ws == 0 or self._global_step >= ws:
+            return self._lambda_task_target
+        t = self._global_step / ws  # 0 → 1 over warmup window
+        if schedule == "cosine":
+            t = (1.0 - math.cos(math.pi * t)) / 2.0  # half-cosine S-curve
+        return self._lambda_task_0 + t * (self._lambda_task_target - self._lambda_task_0)
 
     # ── Single training step ──────────────────────────────────────────────────
 
@@ -168,6 +243,7 @@ class Trainer:
         # ── Backward pass 1: backbone ─────────────────────────────────────────
         # Graph is consumed here.  L_align/L_repulse flow through out["proj"]
         # → proj_head, leaving contamination grads on proj_head.params.
+        self.backbone_criterion.lambda_task = self._current_lambda_task()
         with autocast(self._device_type, enabled=self.cfg.amp):
             loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
@@ -179,6 +255,7 @@ class Trainer:
 
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
+        info["lambda_task"] = self.backbone_criterion.lambda_task
 
         # ── Backward pass 2: proj head ────────────────────────────────────────
         # Zero contamination grads before the proj backward so only
@@ -212,6 +289,7 @@ class Trainer:
         if self.scheduler_proj is not None and not self._erm_mode:
             self.scheduler_proj.step()
 
+        self._global_step += 1
         return info, _accuracy(out["logits"], labels)
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -243,6 +321,8 @@ class Trainer:
         """
         self._setup_schedulers(len(train_loader))
         self.model.to(self.device).train()
+        first_batch = next(iter(train_loader))
+        self._calibrate_lambda_task(first_batch)
 
         mode_str = (
             "ERM"
@@ -264,6 +344,7 @@ class Trainer:
                 "loss_align",
                 "loss_repulse",
                 "loss_backbone",
+                "lambda_task",
                 "acc",
             ]
         )
