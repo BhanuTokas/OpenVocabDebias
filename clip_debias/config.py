@@ -10,64 +10,204 @@ CONCEPT_PROMPT_LIBRARY: Dict[str, Tuple[List[str], List[str]]] = {
         ["a photo of a woman", "a photo of a female person", "female", "a woman"],
     ),
     "Young": (
-        ["a photo of a young person", "a young adult", "young", "a photo of a young face"],
-        ["a photo of an old person", "an elderly person", "old", "a photo of an aged face"],
+        [
+            "a photo of a young person",
+            "a young adult",
+            "young",
+            "a photo of a young face",
+        ],
+        [
+            "a photo of an old person",
+            "an elderly person",
+            "old",
+            "a photo of an aged face",
+        ],
     ),
     "Smiling": (
-        ["a photo of a smiling person", "a person with a smile", "smiling", "a happy face"],
-        ["a photo of a person not smiling", "a serious face", "not smiling", "a neutral expression"],
+        [
+            "a photo of a smiling person",
+            "a person with a smile",
+            "smiling",
+            "a happy face",
+        ],
+        [
+            "a photo of a person not smiling",
+            "a serious face",
+            "not smiling",
+            "a neutral expression",
+        ],
     ),
     "Eyeglasses": (
-        ["a photo of a person wearing glasses", "wearing eyeglasses", "glasses on face", "a person with spectacles"],
-        ["a photo of a person without glasses", "no glasses", "a person without eyeglasses", "bare face without glasses"],
+        [
+            "a photo of a person wearing glasses",
+            "wearing eyeglasses",
+            "glasses on face",
+            "a person with spectacles",
+        ],
+        [
+            "a photo of a person without glasses",
+            "no glasses",
+            "a person without eyeglasses",
+            "bare face without glasses",
+        ],
     ),
     "Bald": (
         ["a photo of a bald person", "a bald head", "bald", "a person with no hair"],
-        ["a photo of a person with hair", "hair on head", "not bald", "a person with a full head of hair"],
+        [
+            "a photo of a person with hair",
+            "hair on head",
+            "not bald",
+            "a person with a full head of hair",
+        ],
     ),
     "Blond_Hair": (
-        ["a photo of a person with blond hair", "blond hair", "blonde", "a person with light golden hair"],
-        ["a photo of a person without blond hair", "dark hair", "non-blond hair", "a person with brown or black hair"],
+        [
+            "a photo of a person with blond hair",
+            "blond hair",
+            "blonde",
+            "a person with light golden hair",
+        ],
+        [
+            "a photo of a person without blond hair",
+            "dark hair",
+            "non-blond hair",
+            "a person with brown or black hair",
+        ],
     ),
     "Heavy_Makeup": (
-        ["a photo of a person with heavy makeup", "wearing a lot of makeup", "heavy cosmetics", "full face of makeup"],
-        ["a photo of a person without makeup", "no makeup", "a natural face", "minimal cosmetics"],
+        [
+            "a photo of a person with heavy makeup",
+            "wearing a lot of makeup",
+            "heavy cosmetics",
+            "full face of makeup",
+        ],
+        [
+            "a photo of a person without makeup",
+            "no makeup",
+            "a natural face",
+            "minimal cosmetics",
+        ],
     ),
     "Pale_Skin": (
-        ["a photo of a person with pale skin", "very light skin", "pale complexion", "fair skin"],
-        ["a photo of a person with darker skin", "darker complexion", "non-pale skin", "olive or dark skin"],
+        [
+            "a photo of a person with pale skin",
+            "very light skin",
+            "pale complexion",
+            "fair skin",
+        ],
+        [
+            "a photo of a person with darker skin",
+            "darker complexion",
+            "non-pale skin",
+            "olive or dark skin",
+        ],
     ),
     "Chubby": (
-        ["a photo of a chubby person", "overweight face", "chubby cheeks", "a heavier person"],
+        [
+            "a photo of a chubby person",
+            "overweight face",
+            "chubby cheeks",
+            "a heavier person",
+        ],
         ["a photo of a thin person", "slim face", "a slender person", "not chubby"],
     ),
     "Wearing_Hat": (
-        ["a photo of a person wearing a hat", "hat on head", "wearing headwear", "a person with a hat"],
-        ["a photo of a person without a hat", "no hat", "bareheaded person", "a person with no headwear"],
+        [
+            "a photo of a person wearing a hat",
+            "hat on head",
+            "wearing headwear",
+            "a person with a hat",
+        ],
+        [
+            "a photo of a person without a hat",
+            "no hat",
+            "bareheaded person",
+            "a person with no headwear",
+        ],
     ),
     "Attractive": (
-        ["a photo of an attractive person", "a beautiful person", "a good-looking person", "attractive face"],
-        ["a photo of an unattractive person", "a plain-looking person", "not attractive", "ordinary face"],
+        [
+            "a photo of an attractive person",
+            "a beautiful person",
+            "a good-looking person",
+            "attractive face",
+        ],
+        [
+            "a photo of an unattractive person",
+            "a plain-looking person",
+            "not attractive",
+            "ordinary face",
+        ],
     ),
     "No_Beard": (
-        ["a photo of a person with no beard", "clean-shaven face", "no facial hair", "a beardless person"],
-        ["a photo of a person with a beard", "beard on face", "facial hair", "a bearded person"],
+        [
+            "a photo of a person with no beard",
+            "clean-shaven face",
+            "no facial hair",
+            "a beardless person",
+        ],
+        [
+            "a photo of a person with a beard",
+            "beard on face",
+            "facial hair",
+            "a bearded person",
+        ],
     ),
     "Mustache": (
-        ["a photo of a person with a mustache", "mustache on upper lip", "facial hair above mouth", "a mustachioed person"],
-        ["a photo of a person without a mustache", "no mustache", "clean upper lip", "a person with no facial hair above lip"],
+        [
+            "a photo of a person with a mustache",
+            "mustache on upper lip",
+            "facial hair above mouth",
+            "a mustachioed person",
+        ],
+        [
+            "a photo of a person without a mustache",
+            "no mustache",
+            "clean upper lip",
+            "a person with no facial hair above lip",
+        ],
     ),
     "Goatee": (
-        ["a photo of a person with a goatee", "goatee beard", "chin beard", "a person with a goatee"],
-        ["a photo of a person without a goatee", "no goatee", "clean chin", "a person with no chin beard"],
+        [
+            "a photo of a person with a goatee",
+            "goatee beard",
+            "chin beard",
+            "a person with a goatee",
+        ],
+        [
+            "a photo of a person without a goatee",
+            "no goatee",
+            "clean chin",
+            "a person with no chin beard",
+        ],
     ),
     "Wearing_Lipstick": (
-        ["a photo of a person wearing lipstick", "red lips", "lipstick on lips", "colored lip makeup"],
-        ["a photo of a person without lipstick", "no lipstick", "bare lips", "natural lip color"],
+        [
+            "a photo of a person wearing lipstick",
+            "red lips",
+            "lipstick on lips",
+            "colored lip makeup",
+        ],
+        [
+            "a photo of a person without lipstick",
+            "no lipstick",
+            "bare lips",
+            "natural lip color",
+        ],
     ),
     "Wearing_Earrings": (
-        ["a photo of a person wearing earrings", "earrings on ears", "ear jewelry", "a person with earrings"],
-        ["a photo of a person without earrings", "no earrings", "bare ears", "a person with no ear jewelry"],
+        [
+            "a photo of a person wearing earrings",
+            "earrings on ears",
+            "ear jewelry",
+            "a person with earrings",
+        ],
+        [
+            "a photo of a person without earrings",
+            "no earrings",
+            "bare ears",
+            "a person with no ear jewelry",
+        ],
     ),
 }
 
@@ -150,7 +290,11 @@ def _apply_overrides(cfg: DebiasingConfig, overrides: dict) -> DebiasingConfig:
     for k, v in overrides.items():
         setattr(cfg, k, v)
     # If concept_attr was overridden but prompts were not, auto-populate from library.
-    if "concept_attr" in overrides and "concept_prompts_pos" not in overrides and "concept_prompts_neg" not in overrides:
+    if (
+        "concept_attr" in overrides
+        and "concept_prompts_pos" not in overrides
+        and "concept_prompts_neg" not in overrides
+    ):
         pos, neg = get_concept_prompts(cfg.concept_attr)
         cfg.concept_prompts_pos = pos
         cfg.concept_prompts_neg = neg
