@@ -52,7 +52,8 @@ class CLIPOracle:
             padding=True,
             truncation=True,
         ).to(self.device)
-        feats = self.model.get_text_features(**inputs)
+        out = self.model.get_text_features(**inputs)
+        feats = out.pooler_output if hasattr(out, "pooler_output") else out
         return F.normalize(feats, dim=-1)
 
     # ── Image encoding ────────────────────────────────────────────────────────
@@ -66,7 +67,8 @@ class CLIPOracle:
         If you pass raw ImageNet-normalised tensors use encode_images_raw()
         which handles re-normalisation internally.
         """
-        feats = self.model.get_image_features(pixel_values=pixel_values)
+        out = self.model.get_image_features(pixel_values=pixel_values)
+        feats = out.pooler_output if hasattr(out, "pooler_output") else out
         return F.normalize(feats, dim=-1)
 
     @torch.no_grad()

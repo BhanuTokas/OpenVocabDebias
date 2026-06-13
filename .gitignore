@@ -218,6 +218,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project Specific
-checkpoints/
+checkpoints*/
 scripts/slurm*
-results/
+results*/
