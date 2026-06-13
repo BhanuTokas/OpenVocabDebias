@@ -123,6 +123,11 @@ class Trainer:
         self._best_val_acc = 0.0
 
     def _setup_schedulers(self, steps_per_epoch: int):
+        if self.cfg.epochs <= 0:
+            raise ValueError(f"Number of epochs must be positive, got {self.cfg.epochs}")
+        if steps_per_epoch <= 0:
+            raise ValueError(f"steps_per_epoch must be positive, got {steps_per_epoch}. Is the training dataset empty?")
+
         total_steps = self.cfg.epochs * steps_per_epoch
         pct_start = self.cfg.warmup_epochs / self.cfg.epochs
         # OneCycleLR requires both phases to have ≥1 step; clamp away from 0 and 1.
