@@ -123,10 +123,14 @@ class Trainer:
         self._best_val_acc = 0.0
 
     def _setup_schedulers(self, steps_per_epoch: int):
+        total_steps = self.cfg.epochs * steps_per_epoch
+        pct_start = self.cfg.warmup_epochs / self.cfg.epochs
+        # OneCycleLR requires both phases to have ≥1 step; clamp away from 0 and 1.
+        pct_start = max(1 / total_steps, min(1 - 1 / total_steps, pct_start))
         common = dict(
             epochs=self.cfg.epochs,
             steps_per_epoch=steps_per_epoch,
-            pct_start=self.cfg.warmup_epochs / self.cfg.epochs,
+            pct_start=pct_start,
         )
         self.scheduler_backbone = OneCycleLR(
             self.optimizer_backbone, max_lr=self.cfg.lr, **common

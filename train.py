@@ -35,6 +35,7 @@ from clip_debias.config import (
     repulse_only_config,
     full_config,
     full_strong_config,
+    get_concept_prompts,
 )
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
@@ -91,6 +92,28 @@ def parse_args():
     parser.add_argument("--checkpoint_dir", default="./checkpoints")
     parser.add_argument("--results_dir", default="./results")
     parser.add_argument("--no_amp", action="store_true")
+    parser.add_argument(
+        "--target_attr",
+        default="Attractive",
+        help="CelebA attribute to classify (e.g. Attractive, Smiling, Blond_Hair)",
+    )
+    parser.add_argument(
+        "--concept_attr",
+        default="Male",
+        help="CelebA attribute to debias against (e.g. Male, Young, Eyeglasses)",
+    )
+    parser.add_argument(
+        "--concept_prompts_pos",
+        nargs="+",
+        default=None,
+        help="Override positive concept prompts (auto-selected from library if omitted)",
+    )
+    parser.add_argument(
+        "--concept_prompts_neg",
+        nargs="+",
+        default=None,
+        help="Override negative concept prompts (auto-selected from library if omitted)",
+    )
     return parser.parse_args()
 
 
@@ -149,8 +172,19 @@ def main():
     csv_path = os.path.join(args.results_dir, "summary.csv")
 
     # ── Shared setup (done once, reused across runs) ───────────────────────────
-    # We build a reference config just to get dataloaders and CLIP.
-    ref_cfg = erm_config(
+    # Resolve concept prompts: CLI override > library lookup > library default.
+    if args.concept_prompts_pos is not None or args.concept_prompts_neg is not None:
+        prompts_pos, prompts_neg = get_concept_prompts(args.concept_attr)
+        prompts_pos = args.concept_prompts_pos or prompts_pos
+        prompts_neg = args.concept_prompts_neg or prompts_neg
+        print(f"Using custom concept prompts for '{args.concept_attr}'")
+    else:
+        prompts_pos, prompts_neg = get_concept_prompts(args.concept_attr)
+        print(f"Auto-selected prompts for concept '{args.concept_attr}'")
+    print(f"  pos: {prompts_pos}")
+    print(f"  neg: {prompts_neg}")
+
+    shared_overrides = dict(
         celeba_root=args.celeba_root,
         backbone=args.backbone,
         epochs=args.epochs,
@@ -159,7 +193,14 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         amp=not args.no_amp,
         device=device,
+        target_attr=args.target_attr,
+        concept_attr=args.concept_attr,
+        concept_prompts_pos=prompts_pos,
+        concept_prompts_neg=prompts_neg,
     )
+
+    # We build a reference config just to get dataloaders and CLIP.
+    ref_cfg = erm_config(**shared_overrides)
 
     print("\nBuilding dataloaders …")
     train_loader, val_loader, test_loader = build_dataloaders(ref_cfg)
@@ -199,17 +240,7 @@ def main():
             set_seed(seed)
 
             # Build a fresh config for this (run, seed) pair
-            cfg = RUN_FACTORIES[run_name](
-                celeba_root=args.celeba_root,
-                backbone=args.backbone,
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-                lr=args.lr,
-                checkpoint_dir=args.checkpoint_dir,
-                amp=not args.no_amp,
-                device=device,
-                seed=seed,
-            )
+            cfg = RUN_FACTORIES[run_name](**shared_overrides, seed=seed)
 
             # Fresh model with same seed → reproducible initialisation
             model = build_model(cfg, num_classes=2)
@@ -240,7 +271,13 @@ def main():
             )
 
             # Log
-            row = {"run_name": run_name, "seed": seed, **metrics}
+            row = {
+                "run_name": run_name,
+                "seed": seed,
+                "target_attr": args.target_attr,
+                "concept_attr": args.concept_attr,
+                **metrics,
+            }
             all_results.append(row)
             append_result(csv_path, row)
             print(f"\n  → Results written to {csv_path}")
