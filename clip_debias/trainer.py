@@ -119,7 +119,7 @@ class Trainer:
 
         # ── lambda_task warmup schedule ───────────────────────────────────────
         self._global_step: int = 0
-        self._lambda_task_warmup_steps: int = 0       # set in _setup_schedulers
+        self._lambda_task_warmup_steps: int = 0  # set in _setup_schedulers
         self._lambda_task_0: float = cfg.lambda_task  # overwritten by _calibrate
         self._lambda_task_target: float = cfg.lambda_task
 
@@ -197,7 +197,9 @@ class Trainer:
         ]
 
         if not active or l_task < 1e-8:
-            print("  [lambda_task warmup] calibration skipped (no active debiasing or l_task≈0)")
+            print(
+                "  [lambda_task warmup] calibration skipped (no active debiasing or l_task≈0)"
+            )
             return
 
         debias_ref = min(active)
@@ -221,7 +223,9 @@ class Trainer:
         t = self._global_step / ws  # 0 → 1 over warmup window
         if schedule == "cosine":
             t = (1.0 - math.cos(math.pi * t)) / 2.0  # half-cosine S-curve
-        return self._lambda_task_0 + t * (self._lambda_task_target - self._lambda_task_0)
+        return self._lambda_task_0 + t * (
+            self._lambda_task_target - self._lambda_task_0
+        )
 
     # ── Single training step ──────────────────────────────────────────────────
 
