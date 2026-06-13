@@ -122,12 +122,12 @@ class BackboneLoss(nn.Module):
         l_align = (
             alignment_loss(proj, v_i_perp)
             if (self.lambda_align > 0 and v_i_perp is not None)
-            else torch.tensor(0.0)
+            else logits.new_zeros(())
         )
         l_repulse = (
             repulsion_loss(proj, v_t_hat)
             if (self.lambda_repulse > 0 and v_t_hat is not None)
-            else torch.tensor(0.0)
+            else logits.new_zeros(())
         )
 
         total = (
