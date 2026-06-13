@@ -43,7 +43,7 @@ from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
-from clip_debias.wordnet_utils import get_random_base_nouns, get_synonyms
+# from clip_debias.wordnet_utils import get_random_base_nouns, get_synonyms
 from dataclasses import dataclass
 from torch.utils.data import DataLoader, Subset
 
@@ -203,12 +203,14 @@ def main():
         print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
         oracle = CLIPOracle(ref_cfg.clip_model, device=device)
 
-        pos_words = get_synonyms("water")
-        neg_words = get_random_base_nouns(
-            n=len(pos_words) * 5, exclude_words=set(pos_words), seed=42
-        )
-        print(f"  pos ({len(pos_words)}): {pos_words}")
-        print(f"  neg (first 8): {neg_words[:8]}")
+        # pos_words = get_synonyms("water")
+        # neg_words = get_random_base_nouns(
+        #     n=len(pos_words) * 5, exclude_words=set(pos_words), seed=42
+        # )
+        pos_words = ["ocean", "beach", "shore", "water", "waves"]
+        neg_words = ["forest", "foliage", "tree", "stalks", "branch", "trees", "branches", "vegetation"]
+        print(f"  pos: {pos_words}")
+        print(f"  neg: {neg_words}")
 
         print("Computing concept direction …")
         v_t_hat = build_concept_direction(
