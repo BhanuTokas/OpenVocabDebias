@@ -43,25 +43,26 @@ from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
+
 # from clip_debias.wordnet_utils import get_random_base_nouns, get_synonyms
 from dataclasses import dataclass
 from torch.utils.data import DataLoader, Subset
 
-
 # ── Waterbirds-specific config defaults ───────────────────────────────────────
+
 
 @dataclass
 class WaterbirdsConfig(DebiasingConfig):
-    concept_attr: str   = "place"
+    concept_attr: str = "place"
     checkpoint_dir: str = "./checkpoints_waterbirds"
 
 
 RUN_FACTORIES = {
-    "erm":          erm_config,
-    "align_only":   align_only_config,
+    "erm": erm_config,
+    "align_only": align_only_config,
     "repulse_only": repulse_only_config,
-    "full":         full_config,
-    "full_strong":  full_strong_config,
+    "full": full_config,
+    "full_strong": full_strong_config,
 }
 
 SEEDS = [42, 123, 456]
@@ -119,35 +120,43 @@ def biased_subset(loader, n: int, bias: float, seed: int = 42) -> DataLoader:
     bias=0.95 → 95/5, bias=0.50 → 50/50 within each class.
     Reads label/place directly from the HF dataset (no image decoding).
     """
-    ds = loader.dataset          # WaterbirdsDebiasDataset
-    hf = ds.ds                   # underlying HuggingFace dataset
+    ds = loader.dataset  # WaterbirdsDebiasDataset
+    hf = ds.ds  # underlying HuggingFace dataset
 
     groups: dict = {(l, p): [] for l in [0, 1] for p in [0, 1]}
     for i, (l, p) in enumerate(zip(hf["label"], hf["place"])):
         groups[(l, p)].append(i)
 
-    rng          = random.Random(seed)
-    n_per_class  = n // 2
-    n_aligned    = int(n_per_class * bias)
+    rng = random.Random(seed)
+    n_per_class = n // 2
+    n_aligned = int(n_per_class * bias)
     n_misaligned = n_per_class - n_aligned
 
     selected = []
     for label, ap, mp in [(0, 0, 1), (1, 1, 0)]:
-        selected.extend(rng.sample(groups[(label, ap)],
-                                   min(n_aligned,    len(groups[(label, ap)]))))
-        selected.extend(rng.sample(groups[(label, mp)],
-                                   min(n_misaligned, len(groups[(label, mp)]))))
+        selected.extend(
+            rng.sample(groups[(label, ap)], min(n_aligned, len(groups[(label, ap)])))
+        )
+        selected.extend(
+            rng.sample(groups[(label, mp)], min(n_misaligned, len(groups[(label, mp)])))
+        )
 
-    return DataLoader(Subset(ds, selected), batch_size=loader.batch_size,
-                      shuffle=False, num_workers=0, pin_memory=False)
+    return DataLoader(
+        Subset(ds, selected),
+        batch_size=loader.batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+    )
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Multi-seed ablation grid for Waterbirds CLIP debiasing"
     )
-    parser.add_argument("--runs", nargs="+", choices=list(RUN_FACTORIES),
-                        default=list(RUN_FACTORIES))
+    parser.add_argument(
+        "--runs", nargs="+", choices=list(RUN_FACTORIES), default=list(RUN_FACTORIES)
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
     parser.add_argument("--backbone", default="resnet50")
     parser.add_argument("--epochs", type=int, default=10)
@@ -156,8 +165,11 @@ def parse_args():
     parser.add_argument("--checkpoint_dir", default="./checkpoints_waterbirds")
     parser.add_argument("--results_dir", default="./results_waterbirds")
     parser.add_argument("--no_amp", action="store_true")
-    parser.add_argument("--quick", action="store_true",
-                        help="Use a small subset (128 train / 32 val / 32 test) for quick testing")
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Use a small subset (128 train / 32 val / 32 test) for quick testing",
+    )
     return parser.parse_args()
 
 
@@ -189,11 +201,13 @@ def main():
     train_loader, val_loader, test_loader = build_waterbirds_dataloaders(ref_cfg)
     if args.quick:
         train_loader = biased_subset(train_loader, 128, bias=0.95)
-        val_loader   = biased_subset(val_loader,    32, bias=0.50)
-        test_loader  = biased_subset(test_loader,   32, bias=0.50)
-    print(f"  Train: {len(train_loader.dataset):,}  "
-          f"Val: {len(val_loader.dataset):,}  "
-          f"Test: {len(test_loader.dataset):,}")
+        val_loader = biased_subset(val_loader, 32, bias=0.50)
+        test_loader = biased_subset(test_loader, 32, bias=0.50)
+    print(
+        f"  Train: {len(train_loader.dataset):,}  "
+        f"Val: {len(val_loader.dataset):,}  "
+        f"Test: {len(test_loader.dataset):,}"
+    )
 
     # Load CLIP once — frozen, shared across all seeds and runs.
     # Skip if every requested run is ERM (CLIP not needed).
@@ -208,7 +222,16 @@ def main():
         #     n=len(pos_words) * 5, exclude_words=set(pos_words), seed=42
         # )
         pos_words = ["ocean", "beach", "shore", "water", "waves"]
-        neg_words = ["forest", "foliage", "tree", "stalks", "branch", "trees", "branches", "vegetation"]
+        neg_words = [
+            "forest",
+            "foliage",
+            "tree",
+            "stalks",
+            "branch",
+            "trees",
+            "branches",
+            "vegetation",
+        ]
         print(f"  pos: {pos_words}")
         print(f"  neg: {neg_words}")
 
@@ -260,7 +283,11 @@ def main():
             model.load_state_dict(torch.load(best_ckpt, map_location=device))
 
             metrics = run_evaluation(
-                model, train_loader, test_loader, device, cfg.amp,
+                model,
+                train_loader,
+                test_loader,
+                device,
+                cfg.amp,
                 label=f"{run_name}  seed={seed}",
             )
 
