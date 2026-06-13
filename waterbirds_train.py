@@ -188,10 +188,9 @@ def main():
     print("\nBuilding dataloaders …")
     train_loader, val_loader, test_loader = build_waterbirds_dataloaders(ref_cfg)
     if args.quick:
-        train_loader = biased_subset(train_loader, 640, bias=0.95)
-        val_loader   = biased_subset(val_loader,    160, bias=0.50)
-        test_loader  = biased_subset(test_loader,   160, bias=0.50)
-        print("  [quick] 640 train (95/5)  /  160 val (50/50)  /  160 test (50/50)")
+        train_loader = biased_subset(train_loader, 128, bias=0.95)
+        val_loader   = biased_subset(val_loader,    32, bias=0.50)
+        test_loader  = biased_subset(test_loader,   32, bias=0.50)
     print(f"  Train: {len(train_loader.dataset):,}  "
           f"Val: {len(val_loader.dataset):,}  "
           f"Test: {len(test_loader.dataset):,}")

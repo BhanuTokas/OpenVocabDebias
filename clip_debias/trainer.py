@@ -74,6 +74,7 @@ class Trainer:
         self.model = model
         self.cfg = cfg
         self.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+        self._device_type = self.device.type
 
         self._erm_mode = cfg.lambda_align == 0.0 and cfg.lambda_repulse == 0.0
         if not self._erm_mode and (oracle is None or v_t_hat is None):
@@ -108,8 +109,8 @@ class Trainer:
 
         # Separate AMP scalers — one per optimizer to avoid cross-scaler inf
         # tracking conflicts between the two backward passes.
-        self.scaler_proj = GradScaler("cuda", enabled=cfg.amp)
-        self.scaler_backbone = GradScaler("cuda", enabled=cfg.amp)
+        self.scaler_proj = GradScaler(self.device.type, enabled=cfg.amp)
+        self.scaler_backbone = GradScaler(self.device.type, enabled=cfg.amp)
 
         # Schedulers set up once we know steps_per_epoch
         self.scheduler_backbone: OneCycleLR | None = None
@@ -155,7 +156,7 @@ class Trainer:
                     orthogonal_project(v_i, self.v_t_hat), dim=-1
                 )  # (B, D)
 
-        with autocast("cuda", enabled=self.cfg.amp):
+        with autocast(self._device_type, enabled=self.cfg.amp):
             out = self.model(images)  # logits, embed, proj
 
         info = {}
@@ -163,7 +164,7 @@ class Trainer:
         # ── Backward pass 1: backbone ─────────────────────────────────────────
         # Graph is consumed here.  L_align/L_repulse flow through out["proj"]
         # → proj_head, leaving contamination grads on proj_head.params.
-        with autocast("cuda", enabled=self.cfg.amp):
+        with autocast(self._device_type, enabled=self.cfg.amp):
             loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
                 labels=labels,
@@ -183,7 +184,7 @@ class Trainer:
             for p in self.model.proj_head.parameters():
                 p.grad = None
 
-            with autocast("cuda", enabled=self.cfg.amp):
+            with autocast(self._device_type, enabled=self.cfg.amp):
                 proj_for_loss = self.model.proj_head(out["embed"].detach())
                 loss_proj, proj_info = self.proj_criterion(proj_for_loss, v_i)
 
@@ -217,7 +218,7 @@ class Trainer:
         total_loss = total_correct = total = 0
         for images, labels, _ in loader:
             images, labels = images.to(self.device), labels.to(self.device)
-            with autocast("cuda", enabled=self.cfg.amp):
+            with autocast(self._device_type, enabled=self.cfg.amp):
                 out = self.model(images)
                 loss = nn.functional.cross_entropy(out["logits"], labels)
             total_loss += loss.item() * images.size(0)
