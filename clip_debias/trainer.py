@@ -120,12 +120,16 @@ class Trainer:
         # ── lambda_task warmup schedule ───────────────────────────────────────
         self._global_step: int = 0
         self._lambda_task_warmup_steps: int = 0  # set in _setup_schedulers
-        self._lambda_task_0: float = cfg.lambda_task  # overwritten by _calibrate_lambdas
+        self._lambda_task_0: float = (
+            cfg.lambda_task
+        )  # overwritten by _calibrate_lambdas
         self._lambda_task_target: float = cfg.lambda_task
 
         # ── lambda_align warmup schedule ──────────────────────────────────────
         self._lambda_align_warmup_steps: int = 0  # set in _setup_schedulers
-        self._lambda_align_0: float = cfg.lambda_align  # overwritten by _calibrate_lambdas
+        self._lambda_align_0: float = (
+            cfg.lambda_align
+        )  # overwritten by _calibrate_lambdas
         self._lambda_align_target: float = cfg.lambda_align
 
         self.ckpt_dir = os.path.join(
@@ -207,7 +211,9 @@ class Trainer:
             )
 
         l_task, l_align, l_repulse = (
-            info["loss_task"], info["loss_align"], info["loss_repulse"]
+            info["loss_task"],
+            info["loss_align"],
+            info["loss_repulse"],
         )
 
         if self.cfg.lambda_repulse > 0:
