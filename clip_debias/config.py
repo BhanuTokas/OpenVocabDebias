@@ -264,9 +264,11 @@ class DebiasingConfig:
     # Backbone loss weights (set lambda_align=0, lambda_repulse=0 for ERM baseline)
     lambda_task: float = 1.0
     lambda_align: float = 1.0
-    lambda_repulse: float = 0.5
+    lambda_repulse: float = 1.0
     lambda_task_warmup: bool = True  # ramp lambda_task up from calibrated init
     lambda_task_warmup_schedule: str = "cosine"  # "linear" | "cosine"
+    lambda_align_warmup: bool = True  # ramp lambda_align up from calibrated init
+    lambda_align_warmup_schedule: str = "cosine"  # "linear" | "cosine"
 
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"
@@ -329,7 +331,7 @@ def repulse_only_config(**overrides) -> DebiasingConfig:
         run_name="repulse_only",
         lambda_task=1.0,
         lambda_align=0.0,
-        lambda_repulse=0.5,
+        lambda_repulse=1.0,
     )
     return _apply_overrides(cfg, overrides)
 
@@ -340,7 +342,7 @@ def full_config(**overrides) -> DebiasingConfig:
         run_name="full",
         lambda_task=1.0,
         lambda_align=1.0,
-        lambda_repulse=0.5,
+        lambda_repulse=1.0,
     )
     return _apply_overrides(cfg, overrides)
 
@@ -351,6 +353,6 @@ def full_strong_config(**overrides) -> DebiasingConfig:
         run_name="full_strong",
         lambda_task=1.0,
         lambda_align=2.0,
-        lambda_repulse=1.0,
+        lambda_repulse=2.0,
     )
     return _apply_overrides(cfg, overrides)

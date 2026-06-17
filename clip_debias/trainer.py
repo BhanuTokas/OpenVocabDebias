@@ -120,8 +120,13 @@ class Trainer:
         # ── lambda_task warmup schedule ───────────────────────────────────────
         self._global_step: int = 0
         self._lambda_task_warmup_steps: int = 0  # set in _setup_schedulers
-        self._lambda_task_0: float = cfg.lambda_task  # overwritten by _calibrate
+        self._lambda_task_0: float = cfg.lambda_task  # overwritten by _calibrate_lambdas
         self._lambda_task_target: float = cfg.lambda_task
+
+        # ── lambda_align warmup schedule ──────────────────────────────────────
+        self._lambda_align_warmup_steps: int = 0  # set in _setup_schedulers
+        self._lambda_align_0: float = cfg.lambda_align  # overwritten by _calibrate_lambdas
+        self._lambda_align_target: float = cfg.lambda_align
 
         self.ckpt_dir = os.path.join(
             cfg.checkpoint_dir, cfg.run_name, f"seed_{cfg.seed}"
@@ -157,16 +162,31 @@ class Trainer:
 
         if not self._erm_mode and self.cfg.lambda_task_warmup:
             self._lambda_task_warmup_steps = total_steps // 2
+        if not self._erm_mode and self.cfg.lambda_align_warmup:
+            self._lambda_align_warmup_steps = total_steps // 2
 
     # ── lambda_task warmup ────────────────────────────────────────────────────
 
     @torch.no_grad()
-    def _calibrate_lambda_task(self, first_batch):
+    def _calibrate_lambdas(self, first_batch):
         """
-        Single no-grad forward pass to set _lambda_task_0 such that
-        lambda_task_0 * l_task_init ≈ min(active debiasing losses).
+        Single no-grad forward pass to calibrate initial lambda values.
+
+        Anchor: loss_repulse (when lambda_repulse > 0).
+          - lambda_task_0  : anchor / l_task
+          - lambda_align_0 : anchor / l_align  (skipped when lambda_repulse == 0)
+
+        Fallback (lambda_repulse == 0):
+          - lambda_task_0  : loss_align / l_task  (when lambda_align > 0)
+          - lambda_align_0 : skipped (no repulse anchor available)
         """
-        if self._erm_mode or not self.cfg.lambda_task_warmup:
+        need_task = not self._erm_mode and self.cfg.lambda_task_warmup
+        need_align = (
+            not self._erm_mode
+            and self.cfg.lambda_align_warmup
+            and self.cfg.lambda_align > 0
+        )
+        if not need_task and not need_align:
             return
 
         images, labels, _ = first_batch
@@ -186,30 +206,46 @@ class Trainer:
                 v_t_hat=self.v_t_hat,
             )
 
-        l_task = info["loss_task"]
-        active = [
-            info[k]
-            for k, lam in [
-                ("loss_align", self.cfg.lambda_align),
-                ("loss_repulse", self.cfg.lambda_repulse),
-            ]
-            if lam > 0
-        ]
+        l_task, l_align, l_repulse = (
+            info["loss_task"], info["loss_align"], info["loss_repulse"]
+        )
 
-        if not active or l_task < 1e-8:
-            print(
-                "  [lambda_task warmup] calibration skipped (no active debiasing or l_task≈0)"
-            )
+        if self.cfg.lambda_repulse > 0:
+            anchor, anchor_name = l_repulse, "loss_repulse"
+        elif self.cfg.lambda_align > 0:
+            anchor, anchor_name = l_align, "loss_align"
+        else:
+            print("  [lambda warmup] calibration skipped (no active debiasing loss)")
             return
 
-        debias_ref = min(active)
-        self._lambda_task_0 = debias_ref / l_task
-        print(
-            f"  [lambda_task warmup] schedule={self.cfg.lambda_task_warmup_schedule}"
-            f"  l_task_init={l_task:.4f}  debias_ref={debias_ref:.4f}"
-            f"  lambda_task_0={self._lambda_task_0:.4f}"
-            f"  → {self._lambda_task_target:.4f} over {self._lambda_task_warmup_steps} steps"
-        )
+        if need_task:
+            if l_task < 1e-8:
+                print("  [lambda_task warmup] calibration skipped (l_task ≈ 0)")
+            else:
+                self._lambda_task_0 = anchor / l_task
+                print(
+                    f"  [lambda_task warmup] schedule={self.cfg.lambda_task_warmup_schedule}"
+                    f"  anchor={anchor_name}={anchor:.4f}  l_task={l_task:.4f}"
+                    f"  lambda_task_0={self._lambda_task_0:.4f}"
+                    f"  → {self._lambda_task_target:.4f} over {self._lambda_task_warmup_steps} steps"
+                )
+
+        if need_align:
+            if self.cfg.lambda_repulse == 0:
+                print(
+                    "  [lambda_align warmup] calibration skipped "
+                    "(lambda_repulse=0; no repulse anchor)"
+                )
+            elif l_align < 1e-8:
+                print("  [lambda_align warmup] calibration skipped (l_align ≈ 0)")
+            else:
+                self._lambda_align_0 = l_repulse / l_align
+                print(
+                    f"  [lambda_align warmup] schedule={self.cfg.lambda_align_warmup_schedule}"
+                    f"  anchor=loss_repulse={l_repulse:.4f}  l_align={l_align:.4f}"
+                    f"  lambda_align_0={self._lambda_align_0:.4f}"
+                    f"  → {self._lambda_align_target:.4f} over {self._lambda_align_warmup_steps} steps"
+                )
 
     def _current_lambda_task(self) -> float:
         if self._erm_mode or not self.cfg.lambda_task_warmup:
@@ -225,6 +261,22 @@ class Trainer:
             t = (1.0 - math.cos(math.pi * t)) / 2.0  # half-cosine S-curve
         return self._lambda_task_0 + t * (
             self._lambda_task_target - self._lambda_task_0
+        )
+
+    def _current_lambda_align(self) -> float:
+        if self._erm_mode or not self.cfg.lambda_align_warmup:
+            return self._lambda_align_target
+        schedule = self.cfg.lambda_align_warmup_schedule
+        if schedule not in ("linear", "cosine"):
+            raise ValueError(f"Unknown lambda_align_warmup_schedule: {schedule!r}")
+        ws = self._lambda_align_warmup_steps
+        if ws == 0 or self._global_step >= ws:
+            return self._lambda_align_target
+        t = self._global_step / ws  # 0 → 1 over warmup window
+        if schedule == "cosine":
+            t = (1.0 - math.cos(math.pi * t)) / 2.0  # half-cosine S-curve
+        return self._lambda_align_0 + t * (
+            self._lambda_align_target - self._lambda_align_0
         )
 
     # ── Single training step ──────────────────────────────────────────────────
@@ -257,6 +309,7 @@ class Trainer:
         # Graph is consumed here.  L_align/L_repulse flow through out["proj"]
         # → proj_head, leaving contamination grads on proj_head.params.
         self.backbone_criterion.lambda_task = self._current_lambda_task()
+        self.backbone_criterion.lambda_align = self._current_lambda_align()
         with autocast(self._device_type, enabled=self.cfg.amp):
             loss_backbone, backbone_info = self.backbone_criterion(
                 logits=out["logits"],
@@ -269,6 +322,7 @@ class Trainer:
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
         info["lambda_task"] = self.backbone_criterion.lambda_task
+        info["lambda_align"] = self.backbone_criterion.lambda_align
 
         # ── Backward pass 2: proj head ────────────────────────────────────────
         # Zero contamination grads before the proj backward so only
@@ -335,7 +389,7 @@ class Trainer:
         self._setup_schedulers(len(train_loader))
         self.model.to(self.device).train()
         first_batch = next(iter(train_loader))
-        self._calibrate_lambda_task(first_batch)
+        self._calibrate_lambdas(first_batch)
 
         mode_str = (
             "ERM"
@@ -358,6 +412,7 @@ class Trainer:
                 "loss_repulse",
                 "loss_backbone",
                 "lambda_task",
+                "lambda_align",
                 "acc",
             ]
         )
