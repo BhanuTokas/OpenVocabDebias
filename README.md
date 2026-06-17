@@ -43,9 +43,9 @@ python train.py --runs erm full --seeds 42 --epochs 2
 |----------|-----------|-------------|---------|
 | `erm` | 0 | 0 | Matched ERM baseline |
 | `align_only` | 1.0 | 0 | Ablate repulsion term |
-| `repulse_only` | 0 | 0.5 | Ablate alignment term |
-| `full` | 1.0 | 0.5 | Full method |
-| `full_strong` | 2.0 | 1.0 | Stronger debiasing signal |
+| `repulse_only` | 0 | 1.0 | Ablate alignment term |
+| `full` | 1.0 | 1.0 | Full method |
+| `full_strong` | 2.0 | 2.0 | Stronger debiasing signal |
 
 All conditions use `λ_task=1.0` and identical hyperparameters, optimiser, and seeds. Results are written to `results/summary.csv`.
 
