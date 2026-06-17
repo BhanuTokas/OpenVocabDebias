@@ -41,6 +41,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 
 from .clip_oracle import CLIPOracle, orthogonal_project
 from .clip_preprocess import RenormalizeForCLIP
+from .evaluate import extract_features, train_linear_probe
 from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
 
@@ -445,6 +446,15 @@ class Trainer:
             print(f"\n  === Epoch {epoch} ({time.time()-t0:.1f}s) ===")
             print(f"    train — " + _fmt(avg))
             print(f"    val   — " + _fmt(val))
+
+            train_feats = extract_features(self.model, train_loader, str(self.device), use_amp=self.cfg.amp)
+            val_feats = extract_features(self.model, val_loader, str(self.device), use_amp=self.cfg.amp)
+            probe = train_linear_probe(
+                X_train=train_feats["embeds"], y_train=train_feats["concepts"],
+                X_test=val_feats["embeds"], y_test=val_feats["concepts"],
+            )
+            print(f"    probe — " + _fmt({"probe_train_acc": probe["probe_train_acc"], "probe_val_acc": probe["probe_test_acc"]}))
+            self.model.train()
 
             ckpt = os.path.join(self.ckpt_dir, f"epoch_{epoch:02d}.pt")
             torch.save(
