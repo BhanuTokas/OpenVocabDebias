@@ -4,7 +4,7 @@ waterbirds_train.py — Multi-seed ablation grid on Waterbirds.
 
 Mirrors train.py exactly.  The only differences are:
   1. Data   : WaterbirdsDebiasDataset (grodino/waterbirds) instead of CelebA
-  2. Concept: WordNet synonyms of "water" vs random nouns (no manual prompts)
+  2. Concept: water-related words vs land/vegetation words as prompt poles
   3. Paths  : checkpoint_dir and results_dir default to waterbirds-specific dirs
 
 Usage
@@ -24,13 +24,15 @@ import csv
 import os
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Subset
 
-from clip_debias.clip_oracle import CLIPOracle, build_concept_direction
+from clip_debias.clip_oracle import CLIPOracle, compute_concept_subspace
 from clip_debias.config import (
     DebiasingConfig,
     align_only_config,
@@ -43,10 +45,6 @@ from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
-
-# from clip_debias.wordnet_utils import get_random_base_nouns, get_synonyms
-from dataclasses import dataclass
-from torch.utils.data import DataLoader, Subset
 
 # ── Waterbirds-specific config defaults ───────────────────────────────────────
 
@@ -66,6 +64,18 @@ RUN_FACTORIES = {
 }
 
 SEEDS = [42, 123, 456]
+
+POS_WORDS = ["ocean", "beach", "shore", "water", "waves"]
+NEG_WORDS = [
+    "forest",
+    "foliage",
+    "tree",
+    "stalks",
+    "branch",
+    "trees",
+    "branches",
+    "vegetation",
+]
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -89,7 +99,6 @@ def append_result(path: str, row: dict):
 
 
 def print_summary(all_results: List[dict]):
-    """Print mean ± std for each run name across seeds."""
     grouped: Dict[str, List[dict]] = defaultdict(list)
     for r in all_results:
         grouped[r["run_name"]].append(r)
@@ -118,10 +127,9 @@ def biased_subset(loader, n: int, bias: float, seed: int = 42) -> DataLoader:
     """
     Sample n examples with a controlled spurious correlation.
     bias=0.95 → 95/5, bias=0.50 → 50/50 within each class.
-    Reads label/place directly from the HF dataset (no image decoding).
     """
-    ds = loader.dataset  # WaterbirdsDebiasDataset
-    hf = ds.ds  # underlying HuggingFace dataset
+    ds = loader.dataset
+    hf = ds.ds
 
     groups: dict = {(l, p): [] for l in [0, 1] for p in [0, 1]}
     for i, (l, p) in enumerate(zip(hf["label"], hf["place"])):
@@ -170,6 +178,13 @@ def parse_args():
         action="store_true",
         help="Use a small subset (128 train / 32 val / 32 test) for quick testing",
     )
+    parser.add_argument(
+        "--concept_subspace_k",
+        type=int,
+        default=3,
+        help="Number of SVD components for concept subspace (default: 3; "
+        "use 1 to reproduce single-direction behaviour)",
+    )
     return parser.parse_args()
 
 
@@ -186,7 +201,6 @@ def main():
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
     csv_path = os.path.join(args.results_dir, "summary.csv")
 
-    # ── Shared setup (done once, reused across runs) ───────────────────────────
     ref_cfg = WaterbirdsConfig(
         backbone=args.backbone,
         epochs=args.epochs,
@@ -195,6 +209,7 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         amp=not args.no_amp,
         device=device,
+        concept_subspace_k=args.concept_subspace_k,
     )
 
     print("\nBuilding dataloaders …")
@@ -209,37 +224,26 @@ def main():
         f"Test: {len(test_loader.dataset):,}"
     )
 
-    # Load CLIP once — frozen, shared across all seeds and runs.
-    # Skip if every requested run is ERM (CLIP not needed).
+    # ── Load CLIP and compute concept subspace (once, shared across all runs) ─
     need_clip = any(r != "erm" for r in args.runs)
-    oracle = v_t_hat = None
+    oracle = subspace = None
     if need_clip:
         print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
         oracle = CLIPOracle(ref_cfg.clip_model, device=device)
 
         # pos_words = get_synonyms("water")
-        # neg_words = get_random_base_nouns(
-        #     n=len(pos_words) * 5, exclude_words=set(pos_words), seed=42
-        # )
-        pos_words = ["ocean", "beach", "shore", "water", "waves"]
-        neg_words = [
-            "forest",
-            "foliage",
-            "tree",
-            "stalks",
-            "branch",
-            "trees",
-            "branches",
-            "vegetation",
-        ]
-        print(f"  pos: {pos_words}")
-        print(f"  neg: {neg_words}")
+        # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
+        print(f"  pos: {POS_WORDS}")
+        print(f"  neg: {NEG_WORDS}")
 
-        print("Computing concept direction …")
-        v_t_hat = build_concept_direction(
-            oracle, prompts_pos=pos_words, prompts_neg=neg_words
+        print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
+        subspace = compute_concept_subspace(
+            oracle,
+            prompts_pos=POS_WORDS,
+            prompts_neg=NEG_WORDS,
+            k=args.concept_subspace_k,
         )
-        print(f"  ‖v_t_hat‖ = {v_t_hat.norm().item():.6f}  (should be 1.0)")
+        print(f"  subspace shape: {tuple(subspace.shape)}")
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -264,6 +268,7 @@ def main():
                 amp=not args.no_amp,
                 device=device,
                 seed=seed,
+                concept_subspace_k=args.concept_subspace_k,
             )
             cfg.concept_attr = "place"
 
@@ -276,7 +281,7 @@ def main():
                 model=model,
                 cfg=cfg,
                 oracle=None if is_erm else oracle,
-                v_t_hat=None if is_erm else v_t_hat,
+                subspace=None if is_erm else subspace,
             )
             best_ckpt = trainer.fit(train_loader, val_loader)
 
@@ -291,12 +296,16 @@ def main():
                 label=f"{run_name}  seed={seed}",
             )
 
-            row = {"run_name": run_name, "seed": seed, **metrics}
+            row = {
+                "run_name": run_name,
+                "seed": seed,
+                "subspace_k": args.concept_subspace_k,
+                **metrics,
+            }
             all_results.append(row)
             append_result(csv_path, row)
             print(f"\n  → Results written to {csv_path}")
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     print_summary(all_results)
     print(f"Full per-run results saved to: {csv_path}")
 

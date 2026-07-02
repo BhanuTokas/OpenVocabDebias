@@ -244,6 +244,13 @@ class DebiasingConfig:
     proj_hidden_dim: int = 1024
     proj_out_dim: int = 512  # must match clip_embed_dim
 
+    # ── Concept subspace ──────────────────────────────────────────────────────
+    # Number of SVD components spanning the concept subspace.
+    # k=1  → reproduces original single-direction behaviour.
+    # k=3  → recommended starting point.
+    # Ablate k=1,2,3,5 to find optimal dimensionality.
+    concept_subspace_k: int = 3
+
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
     # Override by passing concept_prompts_pos / concept_prompts_neg explicitly.
@@ -255,7 +262,7 @@ class DebiasingConfig:
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
-    epochs: int = 10
+    epochs: int = 20
     lr: float = 1e-4  # backbone learning rate
     lr_proj: float = 1e-3  # proj head learning rate (simpler task → higher LR)
     weight_decay: float = 1e-4
@@ -269,6 +276,8 @@ class DebiasingConfig:
     lambda_task_warmup_schedule: str = "cosine"  # "linear" | "cosine"
     lambda_align_warmup: bool = True  # ramp lambda_align up from calibrated init
     lambda_align_warmup_schedule: str = "cosine"  # "linear" | "cosine"
+    lambda_repulse_decay: bool = True  # decay lambda_repulse from high start to target
+    lambda_repulse_decay_schedule: str = "cosine"  # "linear" | "cosine"
 
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"
