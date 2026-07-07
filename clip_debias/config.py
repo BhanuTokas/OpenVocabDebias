@@ -6,8 +6,28 @@ from typing import Dict, List, Tuple
 # Positive = the attribute is present; negative = the attribute is absent.
 CONCEPT_PROMPT_LIBRARY: Dict[str, Tuple[List[str], List[str]]] = {
     "Male": (
-        ["a photo of a man", "a photo of a male person", "male", "a man"],
-        ["a photo of a woman", "a photo of a female person", "female", "a woman"],
+        [
+            "a photo of a man",
+            "a photo of a male person",
+            "male",
+            "a man",
+            "a photo of a husband",
+            "a photo of a boy",
+            "a photo of a masculine person",
+            "he",
+            "his",
+        ],
+        [
+            "a photo of a woman",
+            "a photo of a female person",
+            "female",
+            "a woman",
+            "a photo of a wife",
+            "a photo of a girl",
+            "a photo of a feminine person",
+            "she",
+            "her",
+        ],
     ),
     "Young": (
         [
@@ -262,7 +282,7 @@ class DebiasingConfig:
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
-    epochs: int = 20
+    epochs: int = 10
     lr: float = 1e-4  # backbone learning rate
     lr_proj: float = 1e-3  # proj head learning rate (simpler task → higher LR)
     weight_decay: float = 1e-4
