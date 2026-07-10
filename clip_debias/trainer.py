@@ -29,9 +29,12 @@ Step order per batch
 
 from __future__ import annotations
 
+import json
 import math
 import os
+import subprocess
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Dict
 
@@ -55,6 +58,31 @@ def _accuracy(logits: torch.Tensor, labels: torch.Tensor) -> float:
 
 def _fmt(metrics: Dict[str, float]) -> str:
     return "  ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
+
+
+def _git_info() -> Dict[str, "str | bool | None"]:
+    """Best-effort git commit hash + dirty flag; None if not in a git repo."""
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        return {"commit": commit, "dirty": dirty}
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return {"commit": None, "dirty": None}
 
 
 class Trainer:
@@ -123,12 +151,26 @@ class Trainer:
         self._lambda_repulse_0: float = cfg.lambda_repulse
         self._lambda_repulse_target: float = cfg.lambda_repulse
 
+        # run_id makes each Trainer's directory unique even if run_name/seed
+        # repeat across invocations with different hyperparameters, so a
+        # rerun never silently overwrites a previous run's config/checkpoints.
+        self.run_id = time.strftime("%Y%m%d-%H%M%S")
         self.ckpt_dir = os.path.join(
-            cfg.checkpoint_dir, cfg.run_name, f"seed_{cfg.seed}"
+            cfg.checkpoint_dir, cfg.run_name, f"seed_{cfg.seed}", self.run_id
         )
         Path(self.ckpt_dir).mkdir(parents=True, exist_ok=True)
+        self._write_config()
         self._best_val_acc = 0.0
         self._best_val_wga: float = -1.0
+
+    def _write_config(self):
+        payload = {
+            "run_id": self.run_id,
+            "config": asdict(self.cfg),
+            "git": _git_info(),
+        }
+        with open(os.path.join(self.ckpt_dir, "config.json"), "w") as f:
+            json.dump(payload, f, indent=2)
 
     # ── Scheduler setup ───────────────────────────────────────────────────────
 

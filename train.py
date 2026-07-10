@@ -81,7 +81,7 @@ def parse_args():
         default="resnet18",
         choices=["resnet18", "resnet50", "vit_b_16"],
     )
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--checkpoint_dir", default="./checkpoints")
@@ -269,6 +269,7 @@ def main():
                 "target_attr": args.target_attr,
                 "concept_attr": args.concept_attr,
                 "subspace_k": args.concept_subspace_k,
+                "run_dir": trainer.ckpt_dir,
                 **metrics,
             }
             all_results.append(row)

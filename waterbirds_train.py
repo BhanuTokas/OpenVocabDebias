@@ -304,6 +304,7 @@ def main():
                 "run_name": run_name,
                 "seed": seed,
                 "subspace_k": args.concept_subspace_k,
+                "run_dir": trainer.ckpt_dir,
                 **metrics,
             }
             all_results.append(row)
