@@ -256,7 +256,7 @@ class DebiasingConfig:
     num_workers: int = 4
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    backbone: str = "resnet50"  # "resnet50" | "vit_b_16"
+    backbone: str = "resnet50"  # "resnet18" | "resnet50" | "vit_b_16"
     clip_model: str = "openai/clip-vit-base-patch32"
     clip_embed_dim: int = 512
 

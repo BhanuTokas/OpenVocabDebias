@@ -166,7 +166,11 @@ def parse_args():
         "--runs", nargs="+", choices=list(RUN_FACTORIES), default=list(RUN_FACTORIES)
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
-    parser.add_argument("--backbone", default="resnet50")
+    parser.add_argument(
+        "--backbone",
+        default="resnet18",
+        choices=["resnet18", "resnet50", "vit_b_16"],
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
