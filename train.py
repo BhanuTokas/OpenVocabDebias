@@ -21,14 +21,13 @@ import argparse
 import csv
 import os
 import random
-from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
 import torch
 
-from clip_debias.clip_oracle import CLIPOracle, build_concept_direction
+from clip_debias.clip_oracle import CLIPOracle, compute_concept_subspace
 from clip_debias.config import (
     erm_config,
     align_only_config,
@@ -42,8 +41,6 @@ from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.trainer import Trainer
 
-# ── All available run configurations ─────────────────────────────────────────
-# Ordered so ERM always runs first (natural reference point).
 RUN_FACTORIES = {
     "erm": erm_config,
     "align_only": align_only_config,
@@ -77,16 +74,14 @@ def parse_args():
         default=list(RUN_FACTORIES),
         help="Which run configurations to execute (default: all)",
     )
-    parser.add_argument(
-        "--seeds",
-        nargs="+",
-        type=int,
-        default=SEEDS,
-        help="Random seeds to average over",
-    )
+    parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
     parser.add_argument("--celeba_root", default="./data/celeba")
-    parser.add_argument("--backbone", default="resnet50")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument(
+        "--backbone",
+        default="resnet18",
+        choices=["resnet18", "resnet50", "vit_b_16"],
+    )
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--checkpoint_dir", default="./checkpoints")
@@ -114,6 +109,13 @@ def parse_args():
         default=None,
         help="Override negative concept prompts (auto-selected from library if omitted)",
     )
+    parser.add_argument(
+        "--concept_subspace_k",
+        type=int,
+        default=3,
+        help="Number of SVD components for concept subspace (default: 3; use 1 to "
+        "reproduce single-direction behaviour)",
+    )
     return parser.parse_args()
 
 
@@ -130,7 +132,6 @@ def append_result(path: str, row: dict):
 
 
 def print_summary(all_results: List[dict]):
-    """Print mean ± std for each run name across seeds."""
     from collections import defaultdict
 
     grouped: Dict[str, List[dict]] = defaultdict(list)
@@ -138,7 +139,6 @@ def print_summary(all_results: List[dict]):
         grouped[r["run_name"]].append(r)
 
     metric_keys = ["probe_test_acc", "task_test_acc", "worst_group_acc"]
-
     header = f"{'run':<16}" + "".join(f"  {k:<26}" for k in metric_keys)
     print(f"\n{'='*80}")
     print("  Final summary (mean ± std across seeds)")
@@ -171,8 +171,7 @@ def main():
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
     csv_path = os.path.join(args.results_dir, "summary.csv")
 
-    # ── Shared setup (done once, reused across runs) ───────────────────────────
-    # Resolve concept prompts: CLI override > library lookup > library default.
+    # ── Resolve concept prompts ───────────────────────────────────────────────
     if args.concept_prompts_pos is not None or args.concept_prompts_neg is not None:
         prompts_pos, prompts_neg = get_concept_prompts(args.concept_attr)
         prompts_pos = args.concept_prompts_pos or prompts_pos
@@ -197,9 +196,9 @@ def main():
         concept_attr=args.concept_attr,
         concept_prompts_pos=prompts_pos,
         concept_prompts_neg=prompts_neg,
+        concept_subspace_k=args.concept_subspace_k,
     )
 
-    # We build a reference config just to get dataloaders and CLIP.
     ref_cfg = erm_config(**shared_overrides)
 
     print("\nBuilding dataloaders …")
@@ -210,20 +209,20 @@ def main():
         f"Test: {len(test_loader.dataset):,}"
     )
 
-    # Load CLIP once — it's frozen and shared across all seeds and runs.
-    # Skip if every requested run is ERM (CLIP not needed).
+    # ── Load CLIP and compute concept subspace (once, shared across all runs) ─
     need_clip = any(r != "erm" for r in args.runs)
-    oracle = v_t_hat = None
+    oracle = subspace = None
     if need_clip:
         print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
         oracle = CLIPOracle(ref_cfg.clip_model, device=device)
-        print("Computing concept direction …")
-        v_t_hat = build_concept_direction(
+        print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
+        subspace = compute_concept_subspace(
             oracle,
-            prompts_pos=ref_cfg.concept_prompts_pos,
-            prompts_neg=ref_cfg.concept_prompts_neg,
+            prompts_pos=prompts_pos,
+            prompts_neg=prompts_neg,
+            k=args.concept_subspace_k,
         )
-        print(f"  ‖v_t_hat‖ = {v_t_hat.norm().item():.6f}  (should be 1.0)")
+        print(f"  subspace shape: {tuple(subspace.shape)}")
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -239,28 +238,22 @@ def main():
 
             set_seed(seed)
 
-            # Build a fresh config for this (run, seed) pair
             cfg = RUN_FACTORIES[run_name](**shared_overrides, seed=seed)
-
-            # Fresh model with same seed → reproducible initialisation
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"  Trainable params: {n_params:,}")
 
-            # Train
             is_erm = run_name == "erm"
             trainer = Trainer(
                 model=model,
                 cfg=cfg,
                 oracle=None if is_erm else oracle,
-                v_t_hat=None if is_erm else v_t_hat,
+                subspace=None if is_erm else subspace,
             )
             best_ckpt = trainer.fit(train_loader, val_loader)
 
-            # Load best checkpoint for evaluation
             model.load_state_dict(torch.load(best_ckpt, map_location=device))
 
-            # Evaluate
             metrics = run_evaluation(
                 model,
                 train_loader,
@@ -270,19 +263,19 @@ def main():
                 label=f"{run_name}  seed={seed}",
             )
 
-            # Log
             row = {
                 "run_name": run_name,
                 "seed": seed,
                 "target_attr": args.target_attr,
                 "concept_attr": args.concept_attr,
+                "subspace_k": args.concept_subspace_k,
+                "run_dir": trainer.ckpt_dir,
                 **metrics,
             }
             all_results.append(row)
             append_result(csv_path, row)
             print(f"\n  → Results written to {csv_path}")
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     print_summary(all_results)
     print(f"Full per-run results saved to: {csv_path}")
 

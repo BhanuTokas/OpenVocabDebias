@@ -1,26 +1,23 @@
 """
 losses.py — Loss functions for dual-optimizer debiasing.
 
-Two separate loss groups, each targeting a different set of parameters:
+Two separate loss groups:
 
 Proj head loss (L_reconstruct)
 -------------------------------
 L_reconstruct : 1 - cos(P(E(x)), V_I)
-    The projection head's only job is to reconstruct the original CLIP image
-    embedding as faithfully as possible.  No concept geometry here — that is
-    entirely the backbone's responsibility.
+    Projection head reconstructs the ORIGINAL (un-scrubbed) CLIP image
+    embedding.  No concept geometry here.
 
 Backbone loss (L_backbone)
 ---------------------------
-L_task     : cross-entropy — preserve downstream classification accuracy
-L_align    : 1 - cos(P(E(x)), V_I_perp) — push P(E(x)) toward the
-             concept-scrubbed target.  Because the proj head is a faithful
-             CLIP reconstructor, the only way to satisfy this is for E(x)
-             itself to lose the concept component.
-L_repulse  : (P(E(x)) · V̂_T)² — directly penalise concept alignment in
-             the projected space, with gradient flowing only into the backbone.
-
-Total backbone loss = λ_task·L_task + λ_align·L_align + λ_repulse·L_repulse
+L_task     : cross-entropy
+L_align    : 1 - cos(P(E(x)), V_I_perp)
+             V_I_perp is scrubbed by projecting out the full concept subspace,
+             so this term forces the backbone to remove ALL concept directions.
+L_repulse  : mean( sum_k (P(E(x)) · b_k)^2 )  where b_k are the subspace bases.
+             Penalises alignment with every direction in the concept subspace.
+             Gradient flows only into the backbone via the dual-optimizer setup.
 """
 
 from __future__ import annotations
@@ -33,60 +30,48 @@ import torch.nn.functional as F
 
 
 def task_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Standard cross-entropy classification loss."""
     return F.cross_entropy(logits, targets)
 
 
-def reconstruction_loss(
-    proj: torch.Tensor,
-    v_i: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Proj head loss: 1 - cos(P(E(x)), V_I).
-
-    Encourages the projection head to reconstruct the original (un-scrubbed)
-    CLIP image embedding.  Both inputs should be unit-normalised.
-    """
+def reconstruction_loss(proj: torch.Tensor, v_i: torch.Tensor) -> torch.Tensor:
+    """1 - cos(P(E(x)), V_I).  Both inputs should be unit-normalised."""
     return (1.0 - F.cosine_similarity(proj, v_i, dim=-1)).mean()
 
 
-def alignment_loss(
-    proj: torch.Tensor,
-    v_i_perp: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Backbone loss: 1 - cos(P(E(x)), V_I_perp).
-
-    Pushes the backbone to produce embeddings that, when projected by the
-    (reconstruction-trained) proj head, land near the concept-scrubbed target.
-    Both inputs should be unit-normalised.
-    """
+def alignment_loss(proj: torch.Tensor, v_i_perp: torch.Tensor) -> torch.Tensor:
+    """1 - cos(P(E(x)), V_I_perp).  Both inputs should be unit-normalised."""
     return (1.0 - F.cosine_similarity(proj, v_i_perp, dim=-1)).mean()
 
 
 def repulsion_loss(
     proj: torch.Tensor,
-    v_t_hat: torch.Tensor,
+    subspace: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Backbone loss: mean( (P(E(x)) · V̂_T)² ).
+    Penalise alignment of P(E(x)) with every direction in the concept subspace.
 
-    Penalises both positive and negative concept alignment in the projected
-    space.  Gradient flows only into the backbone (proj head is frozen for
-    this term via the dual-optimizer setup in trainer.py).
+        L_repulse = mean_batch( sum_{k} (proj · b_k)^2 )
+
+    Parameters
+    ----------
+    proj     : (B, D) unit-normalised projected embeddings
+    subspace : (k, D) orthonormal concept subspace basis
+
+    Notes
+    -----
+    The sum over k means that all concept directions are penalised jointly,
+    not just the primary one.  For k=1 this reduces to the original scalar
+    repulsion: mean( (proj · v̂_T)^2 ).
     """
-    dot = (proj * v_t_hat).sum(dim=-1)
-    return (dot**2).mean()
+    projections = proj @ subspace.T  # (B, k)
+    return projections.pow(2).sum(dim=-1).mean()
 
 
 # ── Loss group wrappers ───────────────────────────────────────────────────────
 
 
 class ProjHeadLoss(nn.Module):
-    """
-    Loss for the projection head optimizer.
-    Reconstruction of the full CLIP image embedding V_I.
-    """
+    """Reconstruction of the full CLIP image embedding V_I."""
 
     def forward(
         self,
@@ -99,8 +84,13 @@ class ProjHeadLoss(nn.Module):
 
 class BackboneLoss(nn.Module):
     """
-    Loss for the backbone optimizer.
-    Task + alignment toward V_I_perp + repulsion from V̂_T.
+    Task + alignment toward V_I_perp + repulsion from concept subspace.
+
+    v_t_hat / subspace
+    ------------------
+    Accepts either:
+      subspace : (k, D)  — full k-dimensional concept subspace  [recommended]
+      v_t_hat  : (D,)    — single concept direction (legacy; auto-converted to (1, D))
     """
 
     def __init__(self, cfg):
@@ -113,9 +103,11 @@ class BackboneLoss(nn.Module):
         self,
         logits: torch.Tensor,  # (B, num_classes)
         labels: torch.Tensor,  # (B,)
-        proj: torch.Tensor,  # (B, D) P(E(x)), unit-normalised
+        proj: torch.Tensor,  # (B, D) unit-normalised
         v_i_perp: torch.Tensor | None = None,  # (B, D) concept-scrubbed target
-        v_t_hat: torch.Tensor | None = None,  # (D,)   unit concept direction
+        subspace: torch.Tensor | None = None,  # (k, D) concept subspace
+        # Legacy single-direction argument kept for backwards compatibility:
+        v_t_hat: torch.Tensor | None = None,  # (D,) — auto-converted to (1, D)
     ):
         l_task = task_loss(logits, labels)
 
@@ -124,9 +116,15 @@ class BackboneLoss(nn.Module):
             if (self.lambda_align > 0 and v_i_perp is not None)
             else logits.new_zeros(())
         )
+
+        # Resolve subspace: prefer explicit subspace, fall back to v_t_hat
+        _subspace = subspace
+        if _subspace is None and v_t_hat is not None:
+            _subspace = v_t_hat.unsqueeze(0)  # (D,) → (1, D)
+
         l_repulse = (
-            repulsion_loss(proj, v_t_hat)
-            if (self.lambda_repulse > 0 and v_t_hat is not None)
+            repulsion_loss(proj, _subspace)
+            if (self.lambda_repulse > 0 and _subspace is not None)
             else logits.new_zeros(())
         )
 

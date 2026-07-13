@@ -6,8 +6,28 @@ from typing import Dict, List, Tuple
 # Positive = the attribute is present; negative = the attribute is absent.
 CONCEPT_PROMPT_LIBRARY: Dict[str, Tuple[List[str], List[str]]] = {
     "Male": (
-        ["a photo of a man", "a photo of a male person", "male", "a man"],
-        ["a photo of a woman", "a photo of a female person", "female", "a woman"],
+        [
+            "a photo of a man",
+            "a photo of a male person",
+            "male",
+            "a man",
+            "a photo of a husband",
+            "a photo of a boy",
+            "a photo of a masculine person",
+            "he",
+            "his",
+        ],
+        [
+            "a photo of a woman",
+            "a photo of a female person",
+            "female",
+            "a woman",
+            "a photo of a wife",
+            "a photo of a girl",
+            "a photo of a feminine person",
+            "she",
+            "her",
+        ],
     ),
     "Young": (
         [
@@ -236,13 +256,20 @@ class DebiasingConfig:
     num_workers: int = 4
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    backbone: str = "resnet50"  # "resnet50" | "vit_b_16"
+    backbone: str = "resnet50"  # "resnet18" | "resnet50" | "vit_b_16"
     clip_model: str = "openai/clip-vit-base-patch32"
     clip_embed_dim: int = 512
 
     # Projection head (E(x) → CLIP space)
     proj_hidden_dim: int = 1024
     proj_out_dim: int = 512  # must match clip_embed_dim
+
+    # ── Concept subspace ──────────────────────────────────────────────────────
+    # Number of SVD components spanning the concept subspace.
+    # k=1  → reproduces original single-direction behaviour.
+    # k=3  → recommended starting point.
+    # Ablate k=1,2,3,5 to find optimal dimensionality.
+    concept_subspace_k: int = 3
 
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
@@ -264,7 +291,13 @@ class DebiasingConfig:
     # Backbone loss weights (set lambda_align=0, lambda_repulse=0 for ERM baseline)
     lambda_task: float = 1.0
     lambda_align: float = 1.0
-    lambda_repulse: float = 0.5
+    lambda_repulse: float = 1.0
+    lambda_task_warmup: bool = True  # ramp lambda_task up from calibrated init
+    lambda_task_warmup_schedule: str = "cosine"  # "linear" | "cosine"
+    lambda_align_warmup: bool = True  # ramp lambda_align up from calibrated init
+    lambda_align_warmup_schedule: str = "cosine"  # "linear" | "cosine"
+    lambda_repulse_decay: bool = True  # decay lambda_repulse from high start to target
+    lambda_repulse_decay_schedule: str = "cosine"  # "linear" | "cosine"
 
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"
@@ -327,7 +360,7 @@ def repulse_only_config(**overrides) -> DebiasingConfig:
         run_name="repulse_only",
         lambda_task=1.0,
         lambda_align=0.0,
-        lambda_repulse=0.5,
+        lambda_repulse=1.0,
     )
     return _apply_overrides(cfg, overrides)
 
@@ -338,7 +371,7 @@ def full_config(**overrides) -> DebiasingConfig:
         run_name="full",
         lambda_task=1.0,
         lambda_align=1.0,
-        lambda_repulse=0.5,
+        lambda_repulse=1.0,
     )
     return _apply_overrides(cfg, overrides)
 
@@ -349,6 +382,6 @@ def full_strong_config(**overrides) -> DebiasingConfig:
         run_name="full_strong",
         lambda_task=1.0,
         lambda_align=2.0,
-        lambda_repulse=1.0,
+        lambda_repulse=2.0,
     )
     return _apply_overrides(cfg, overrides)

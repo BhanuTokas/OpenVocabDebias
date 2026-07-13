@@ -39,6 +39,14 @@ class ProjectionHead(nn.Module):
 # ── Backbone helpers ──────────────────────────────────────────────────────────
 
 
+def _build_resnet18(num_classes: int):
+    """ResNet-18 with the final FC replaced for num_classes."""
+    backbone = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+    embed_dim = backbone.fc.in_features  # 512
+    backbone.fc = nn.Linear(embed_dim, num_classes)
+    return backbone, embed_dim
+
+
 def _build_resnet50(num_classes: int):
     """ResNet-50 with the final FC replaced for num_classes."""
     backbone = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
@@ -78,7 +86,11 @@ class DebiasedClassifier(nn.Module):
     def __init__(self, backbone_name: str, num_classes: int, cfg):
         super().__init__()
 
-        if backbone_name == "resnet50":
+        if backbone_name == "resnet18":
+            self.backbone, embed_dim = _build_resnet18(num_classes)
+            # Hook target: avgpool output  (B, 512, 1, 1) → flattened to (B, 512)
+            self._hook_layer = self.backbone.avgpool
+        elif backbone_name == "resnet50":
             self.backbone, embed_dim = _build_resnet50(num_classes)
             # Hook target: avgpool output  (B, 2048, 1, 1) → flattened to (B, 2048)
             self._hook_layer = self.backbone.avgpool
@@ -94,7 +106,7 @@ class DebiasedClassifier(nn.Module):
         else:
             raise ValueError(
                 f"Unsupported backbone '{backbone_name}'. "
-                "Choose 'resnet50' or 'vit_b_16'."
+                "Choose 'resnet18', 'resnet50', or 'vit_b_16'."
             )
 
         self.proj_head = ProjectionHead(
