@@ -31,8 +31,15 @@ if [ ! -f waterbirds_train.py ]; then
     exit 1
 fi
 
-# No pyproject.toml in this repo: run in a uv-managed env built from requirements.txt
-RUN="uv run --no-project --with-requirements requirements.txt python"
+# Isolated env from pyproject.toml + uv.lock (.venv in the repo). Sol's system
+# python and ~/.local site-packages leak older packages (numpy 1.26) into
+# layered uv envs, so use uv's own Python and ignore the user site.
+export PYTHONNOUSERSITE=1
+export UV_PYTHON_PREFERENCE=only-managed
+RUN="uv run --locked python"
+
+# Fail fast if the env is broken, and show where numpy/torch come from
+$RUN -c "import numpy, pyarrow, datasets, torch, sys; print(sys.executable); print('numpy', numpy.__version__, numpy.__file__); print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
 CKPT_DIR=./checkpoints_waterbirds/sched_control
 RESULTS_DIR=./results_waterbirds/sched_control

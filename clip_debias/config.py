@@ -257,6 +257,7 @@ class DebiasingConfig:
 
     # ── Model ─────────────────────────────────────────────────────────────────
     backbone: str = "resnet50"  # "resnet18" | "resnet50" | "vit_b_16"
+    pretrained: bool = True  # ImageNet weights; False = random init (from scratch)
     clip_model: str = "openai/clip-vit-base-patch32"
     clip_embed_dim: int = 512
 
@@ -354,6 +355,17 @@ def disable_lambda_schedules(cfg: DebiasingConfig) -> DebiasingConfig:
     cfg.lambda_repulse_decay = False
     if had_schedule and not is_erm and not cfg.sequential_mode:
         cfg.run_name += "_nosched"
+    return cfg
+
+
+def use_scratch_backbone(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Randomly initialise the backbone instead of loading ImageNet weights.
+
+    Appends "_scratch" to run_name (for every run, including ERM) so scratch
+    and pretrained runs are distinguishable in checkpoint dirs and summary.csv.
+    """
+    cfg.pretrained = False
+    cfg.run_name += "_scratch"
     return cfg
 
 

@@ -39,25 +39,28 @@ class ProjectionHead(nn.Module):
 # ── Backbone helpers ──────────────────────────────────────────────────────────
 
 
-def _build_resnet18(num_classes: int):
+def _build_resnet18(num_classes: int, pretrained: bool = True):
     """ResNet-18 with the final FC replaced for num_classes."""
-    backbone = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+    weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+    backbone = models.resnet18(weights=weights)
     embed_dim = backbone.fc.in_features  # 512
     backbone.fc = nn.Linear(embed_dim, num_classes)
     return backbone, embed_dim
 
 
-def _build_resnet50(num_classes: int):
+def _build_resnet50(num_classes: int, pretrained: bool = True):
     """ResNet-50 with the final FC replaced for num_classes."""
-    backbone = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+    weights = models.ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
+    backbone = models.resnet50(weights=weights)
     embed_dim = backbone.fc.in_features  # 2048
     backbone.fc = nn.Linear(embed_dim, num_classes)
     return backbone, embed_dim
 
 
-def _build_vit_b16(num_classes: int):
+def _build_vit_b16(num_classes: int, pretrained: bool = True):
     """ViT-B/16 with the head replaced for num_classes."""
-    backbone = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1)
+    weights = models.ViT_B_16_Weights.IMAGENET1K_V1 if pretrained else None
+    backbone = models.vit_b_16(weights=weights)
     embed_dim = backbone.heads.head.in_features  # 768
     backbone.heads.head = nn.Linear(embed_dim, num_classes)
     return backbone, embed_dim
@@ -87,15 +90,15 @@ class DebiasedClassifier(nn.Module):
         super().__init__()
 
         if backbone_name == "resnet18":
-            self.backbone, embed_dim = _build_resnet18(num_classes)
+            self.backbone, embed_dim = _build_resnet18(num_classes, cfg.pretrained)
             # Hook target: avgpool output  (B, 512, 1, 1) → flattened to (B, 512)
             self._hook_layer = self.backbone.avgpool
         elif backbone_name == "resnet50":
-            self.backbone, embed_dim = _build_resnet50(num_classes)
+            self.backbone, embed_dim = _build_resnet50(num_classes, cfg.pretrained)
             # Hook target: avgpool output  (B, 2048, 1, 1) → flattened to (B, 2048)
             self._hook_layer = self.backbone.avgpool
         elif backbone_name == "vit_b_16":
-            self.backbone, embed_dim = _build_vit_b16(num_classes)
+            self.backbone, embed_dim = _build_vit_b16(num_classes, cfg.pretrained)
             # Hook target: ln (the LayerNorm after the transformer blocks, before
             # the head).  torchvision's encoder returns a plain tensor of shape
             # (B, num_patches+1, D); ln is applied to the full sequence and then

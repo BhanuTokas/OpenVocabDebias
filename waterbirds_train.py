@@ -40,6 +40,7 @@ from clip_debias.config import (
     full_strong_config,
     sequential_config,
     disable_lambda_schedules,
+    use_scratch_backbone,
     repulse_only_config,
 )
 from clip_debias.evaluate import run_evaluation
@@ -196,6 +197,12 @@ def parse_args():
         help="Use constant lambdas: disable the calibrated lambda_task/lambda_align "
         "warmup and lambda_repulse decay. Affected runs get a '_nosched' suffix.",
     )
+    parser.add_argument(
+        "--scratch",
+        action="store_true",
+        help="Randomly initialise the backbone instead of loading ImageNet weights. "
+        "All runs get a '_scratch' suffix; raise --epochs/--lr accordingly.",
+    )
     return parser.parse_args()
 
 
@@ -285,6 +292,8 @@ def main():
             cfg.concept_attr = "place"
             if args.no_lambda_schedules:
                 cfg = disable_lambda_schedules(cfg)
+            if args.scratch:
+                cfg = use_scratch_backbone(cfg)
 
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
