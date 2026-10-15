@@ -219,6 +219,7 @@ __marimo__/
 
 # Project Specific
 checkpoints*/
+logs/
 scripts/slurm*
 results*/
 misc/

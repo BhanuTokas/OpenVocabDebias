@@ -3,8 +3,11 @@ evaluate.py — Post-hoc evaluation of debiased representations.
 
 Three evaluations
 -----------------
-1. Linear probe accuracy for the concept (gender) on E(x).
+1. Linear probe accuracy for the concept (gender) on E(x), and on P(E(x)).
    A drop toward chance (50 %) indicates the concept has been scrubbed.
+   The losses act on P(E(x)), so a low P-probe with a high E-probe means the
+   concept is hidden from the projection head rather than removed from E(x).
+   (For ERM the proj head is untrained, so its P-probe is a random projection.)
 
 2. Downstream task accuracy (overall top-1).
    Should stay high after debiasing.
@@ -169,7 +172,8 @@ def run_evaluation(
     Returns
     -------
     metrics : dict with keys
-        probe_train_acc, probe_test_acc,
+        probe_train_acc, probe_test_acc,            (probe on E(x))
+        probe_proj_train_acc, probe_proj_test_acc,  (probe on P(E(x)))
         task_test_acc,
         worst_group_acc,
         group_acc_(t,c) for each (target, concept) cell
@@ -193,6 +197,14 @@ def run_evaluation(
         y_test=test_feats["concepts"],
     )
 
+    print("  Fitting concept probe on P(E(x)) …")
+    proj_probe = train_linear_probe(
+        X_train=train_feats["projs"],
+        y_train=train_feats["concepts"],
+        X_test=test_feats["projs"],
+        y_test=test_feats["concepts"],
+    )
+
     # ── 2. Overall task accuracy ──────────────────────────────────────────────
     task_acc = float((test_feats["preds"] == test_feats["targets"]).mean())
 
@@ -206,6 +218,8 @@ def run_evaluation(
     # ── Assemble & print ──────────────────────────────────────────────────────
     metrics: Dict[str, float] = {
         **probe_metrics,
+        "probe_proj_train_acc": proj_probe["probe_train_acc"],
+        "probe_proj_test_acc": proj_probe["probe_test_acc"],
         "task_test_acc": task_acc,
         "worst_group_acc": worst_acc,
         **{f"group_acc_{k}": v for k, v in group_accs.items()},
@@ -215,6 +229,9 @@ def run_evaluation(
     print(
         f"    Concept probe test acc  : {probe_metrics['probe_test_acc']:.4f}"
         f"  (chance = 0.50)"
+    )
+    print(
+        f"    Probe on P(E(x)) (test) : {proj_probe['probe_test_acc']:.4f}"
     )
     print(f"    Overall task acc (test) : {task_acc:.4f}")
     print(f"    Worst-group acc (test)  : {worst_acc:.4f}")

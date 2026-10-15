@@ -20,7 +20,6 @@ Usage
 """
 
 import argparse
-import csv
 import os
 import random
 from collections import defaultdict
@@ -39,10 +38,13 @@ from clip_debias.config import (
     erm_config,
     full_config,
     full_strong_config,
+    sequential_config,
+    disable_lambda_schedules,
     repulse_only_config,
 )
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
+from clip_debias.results_io import append_result
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
 
@@ -61,6 +63,7 @@ RUN_FACTORIES = {
     "repulse_only": repulse_only_config,
     "full": full_config,
     "full_strong": full_strong_config,
+    "sequential": sequential_config,
 }
 
 SEEDS = [42, 123, 456]
@@ -87,15 +90,6 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def append_result(path: str, row: dict):
-    file_exists = os.path.isfile(path)
-    with open(path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys())
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
 
 
 def print_summary(all_results: List[dict]):
@@ -189,6 +183,19 @@ def parse_args():
         help="Number of SVD components for concept subspace (default: 3; "
         "use 1 to reproduce single-direction behaviour)",
     )
+    parser.add_argument(
+        "--sequential_switch_epoch",
+        type=int,
+        default=5,
+        help="For the 'sequential' run: epoch at which training hard-switches "
+        "from repulse-only to align-only (default: 5, for 10-epoch runs)",
+    )
+    parser.add_argument(
+        "--no_lambda_schedules",
+        action="store_true",
+        help="Use constant lambdas: disable the calibrated lambda_task/lambda_align "
+        "warmup and lambda_repulse decay. Affected runs get a '_nosched' suffix.",
+    )
     return parser.parse_args()
 
 
@@ -273,8 +280,11 @@ def main():
                 device=device,
                 seed=seed,
                 concept_subspace_k=args.concept_subspace_k,
+                sequential_phase_switch_epoch=args.sequential_switch_epoch,
             )
             cfg.concept_attr = "place"
+            if args.no_lambda_schedules:
+                cfg = disable_lambda_schedules(cfg)
 
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -297,11 +307,11 @@ def main():
                 test_loader,
                 device,
                 cfg.amp,
-                label=f"{run_name}  seed={seed}",
+                label=f"{cfg.run_name}  seed={seed}",
             )
 
             row = {
-                "run_name": run_name,
+                "run_name": cfg.run_name,
                 "seed": seed,
                 "subspace_k": args.concept_subspace_k,
                 "run_dir": trainer.ckpt_dir,

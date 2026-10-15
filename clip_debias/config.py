@@ -299,6 +299,12 @@ class DebiasingConfig:
     lambda_repulse_decay: bool = True  # decay lambda_repulse from high start to target
     lambda_repulse_decay_schedule: str = "cosine"  # "linear" | "cosine"
 
+    # Sequential two-phase training: repulse-only until sequential_phase_switch_epoch,
+    # then align-only for the remainder. Hard switch, no interpolation. Only takes
+    # effect when sequential_mode=True (see sequential_config()).
+    sequential_mode: bool = False
+    sequential_phase_switch_epoch: int = 5
+
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"
     seed: int = 42
@@ -329,6 +335,25 @@ def _apply_overrides(cfg: DebiasingConfig, overrides: dict) -> DebiasingConfig:
         pos, neg = get_concept_prompts(cfg.concept_attr)
         cfg.concept_prompts_pos = pos
         cfg.concept_prompts_neg = neg
+    return cfg
+
+
+def disable_lambda_schedules(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Turn off the calibrated lambda warmup/decay schedules (constant lambdas).
+
+    Appends "_nosched" to run_name when a schedule was actually active, so the
+    run is distinguishable in checkpoint dirs and summary.csv.  ERM and
+    sequential runs never use the schedules, so their names are left alone.
+    """
+    had_schedule = (
+        cfg.lambda_task_warmup or cfg.lambda_align_warmup or cfg.lambda_repulse_decay
+    )
+    is_erm = cfg.lambda_align == 0.0 and cfg.lambda_repulse == 0.0
+    cfg.lambda_task_warmup = False
+    cfg.lambda_align_warmup = False
+    cfg.lambda_repulse_decay = False
+    if had_schedule and not is_erm and not cfg.sequential_mode:
+        cfg.run_name += "_nosched"
     return cfg
 
 
@@ -383,5 +408,27 @@ def full_strong_config(**overrides) -> DebiasingConfig:
         lambda_task=1.0,
         lambda_align=2.0,
         lambda_repulse=2.0,
+    )
+    return _apply_overrides(cfg, overrides)
+
+
+def sequential_config(**overrides) -> DebiasingConfig:
+    """Two-phase: repulse-only, then hard-switch to align-only.
+
+    Avoids the gradient conflict between L_align and L_repulse by never
+    running them concurrently. lambda_task_warmup / lambda_align_warmup /
+    lambda_repulse_decay are disabled since the phase switch is a hard
+    step, not a continuous schedule.
+    """
+    cfg = DebiasingConfig(
+        run_name="sequential",
+        lambda_task=1.0,
+        lambda_align=1.0,
+        lambda_repulse=1.0,
+        lambda_task_warmup=False,
+        lambda_align_warmup=False,
+        lambda_repulse_decay=False,
+        sequential_mode=True,
+        sequential_phase_switch_epoch=5,
     )
     return _apply_overrides(cfg, overrides)

@@ -141,6 +141,7 @@ class Trainer:
 
         # ── Lambda schedules ──────────────────────────────────────────────────
         self._global_step: int = 0
+        self._current_epoch: int = 0
         self._lambda_task_warmup_steps: int = 0
         self._lambda_align_warmup_steps: int = 0
         self._lambda_repulse_decay_steps: int = 0
@@ -311,7 +312,13 @@ class Trainer:
             self.cfg.lambda_task_warmup_schedule,
         )
 
+    def _in_sequential_align_phase(self) -> bool:
+        """True once training has passed sequential_phase_switch_epoch."""
+        return self._current_epoch > self.cfg.sequential_phase_switch_epoch
+
     def _current_lambda_align(self) -> float:
+        if self.cfg.sequential_mode:
+            return self._lambda_align_target if self._in_sequential_align_phase() else 0.0
         if self._erm_mode or not self.cfg.lambda_align_warmup:
             return self._lambda_align_target
         return self._scheduled_lambda(
@@ -322,6 +329,8 @@ class Trainer:
         )
 
     def _current_lambda_repulse(self) -> float:
+        if self.cfg.sequential_mode:
+            return 0.0 if self._in_sequential_align_phase() else self._lambda_repulse_target
         if self._erm_mode or not self.cfg.lambda_repulse_decay:
             return self._lambda_repulse_target
         return self._scheduled_lambda(
@@ -438,6 +447,11 @@ class Trainer:
                 f"  lr={self.cfg.lr}  lr_proj={self.cfg.lr_proj}"
             )
         )
+        if self.cfg.sequential_mode:
+            mode_str += (
+                f"  sequential(repulse-only ≤ epoch {self.cfg.sequential_phase_switch_epoch}"
+                f", align-only after)"
+            )
         print(f"\n[{self.cfg.run_name}]  seed={self.cfg.seed}  {mode_str}")
 
         log_keys = (
@@ -457,6 +471,11 @@ class Trainer:
         )
 
         for epoch in range(1, self.cfg.epochs + 1):
+            if self.cfg.sequential_mode and epoch == self.cfg.sequential_phase_switch_epoch + 1:
+                print(
+                    f"  [sequential] switching to align-only phase at epoch {epoch}"
+                )
+            self._current_epoch = epoch
             t0 = time.time()
             running = {k: 0.0 for k in log_keys}
             n = 0
