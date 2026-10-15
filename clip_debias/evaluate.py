@@ -230,9 +230,7 @@ def run_evaluation(
         f"    Concept probe test acc  : {probe_metrics['probe_test_acc']:.4f}"
         f"  (chance = 0.50)"
     )
-    print(
-        f"    Probe on P(E(x)) (test) : {proj_probe['probe_test_acc']:.4f}"
-    )
+    print(f"    Probe on P(E(x)) (test) : {proj_probe['probe_test_acc']:.4f}")
     print(f"    Overall task acc (test) : {task_acc:.4f}")
     print(f"    Worst-group acc (test)  : {worst_acc:.4f}")
     print(f"    Per-group breakdown:")

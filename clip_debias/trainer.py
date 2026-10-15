@@ -318,7 +318,9 @@ class Trainer:
 
     def _current_lambda_align(self) -> float:
         if self.cfg.sequential_mode:
-            return self._lambda_align_target if self._in_sequential_align_phase() else 0.0
+            return (
+                self._lambda_align_target if self._in_sequential_align_phase() else 0.0
+            )
         if self._erm_mode or not self.cfg.lambda_align_warmup:
             return self._lambda_align_target
         return self._scheduled_lambda(
@@ -330,7 +332,11 @@ class Trainer:
 
     def _current_lambda_repulse(self) -> float:
         if self.cfg.sequential_mode:
-            return 0.0 if self._in_sequential_align_phase() else self._lambda_repulse_target
+            return (
+                0.0
+                if self._in_sequential_align_phase()
+                else self._lambda_repulse_target
+            )
         if self._erm_mode or not self.cfg.lambda_repulse_decay:
             return self._lambda_repulse_target
         return self._scheduled_lambda(
@@ -471,10 +477,11 @@ class Trainer:
         )
 
         for epoch in range(1, self.cfg.epochs + 1):
-            if self.cfg.sequential_mode and epoch == self.cfg.sequential_phase_switch_epoch + 1:
-                print(
-                    f"  [sequential] switching to align-only phase at epoch {epoch}"
-                )
+            if (
+                self.cfg.sequential_mode
+                and epoch == self.cfg.sequential_phase_switch_epoch + 1
+            ):
+                print(f"  [sequential] switching to align-only phase at epoch {epoch}")
             self._current_epoch = epoch
             t0 = time.time()
             running = {k: 0.0 for k in log_keys}

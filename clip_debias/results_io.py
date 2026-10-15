@@ -42,7 +42,9 @@ def append_result(path: str, row: dict):
                 f"moved it to {backup} and starting a fresh file"
             )
         else:
-            merged = existing_fields + [k for k in fieldnames if k not in existing_fields]
+            merged = existing_fields + [
+                k for k in fieldnames if k not in existing_fields
+            ]
             print(
                 f"  [append_result] header of {path} differs from row schema; "
                 f"rewriting with {len(merged)} merged columns"
