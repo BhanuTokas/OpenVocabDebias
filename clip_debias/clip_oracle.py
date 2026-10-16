@@ -286,11 +286,16 @@ def embed_dataset(
 
 @torch.no_grad()
 def zeroshot_concept_labels(
-    oracle: CLIPOracle, prompts_pos: List[str], prompts_neg: List[str], v_i: torch.Tensor
+    oracle: CLIPOracle,
+    prompts_pos: List[str],
+    prompts_neg: List[str],
+    v_i: torch.Tensor,
 ) -> torch.Tensor:
     """CLIP zero-shot concept prediction: 1 if V_I is closer to the mean positive
     prompt embedding than to the mean negative one."""
-    d = oracle.encode_text(prompts_pos).mean(0) - oracle.encode_text(prompts_neg).mean(0)
+    d = oracle.encode_text(prompts_pos).mean(0) - oracle.encode_text(prompts_neg).mean(
+        0
+    )
     return (v_i.to(d.device) @ d > 0).long().cpu()
 
 
