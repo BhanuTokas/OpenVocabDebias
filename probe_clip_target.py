@@ -59,44 +59,76 @@ SPLITS = ["train", "val", "test"]
 
 # Waterbirds backgrounds come from Places: ocean / natural lake (water) and
 # bamboo forest / broadleaf forest (land).  Same length → per-pair differences.
-WATER_PLACES = ["over the ocean", "on a lake", "at the beach", "near the shore",
-                "on the water", "by the sea"]
-LAND_PLACES = ["in a bamboo forest", "in a broadleaf forest", "in the woods",
-               "on a tree branch", "among green foliage", "in a forest"]
-WB_TEMPLATES = ["a photo of a bird {}", "a bird {}", "a photo of something {}",
-                "a picture taken {}"]
+WATER_PLACES = [
+    "over the ocean",
+    "on a lake",
+    "at the beach",
+    "near the shore",
+    "on the water",
+    "by the sea",
+]
+LAND_PLACES = [
+    "in a bamboo forest",
+    "in a broadleaf forest",
+    "in the woods",
+    "on a tree branch",
+    "among green foliage",
+    "in a forest",
+]
+WB_TEMPLATES = [
+    "a photo of a bird {}",
+    "a bird {}",
+    "a photo of something {}",
+    "a picture taken {}",
+]
 
 MALE_NOUNS = ["man", "male person", "boy", "gentleman", "guy", "father"]
 FEMALE_NOUNS = ["woman", "female person", "girl", "lady", "gal", "mother"]
-FACE_TEMPLATES = ["a photo of a {}", "a close-up photo of the face of a {}",
-                  "a portrait of a {}", "a celebrity photo of a {}"]
+FACE_TEMPLATES = [
+    "a photo of a {}",
+    "a close-up photo of the face of a {}",
+    "a portrait of a {}",
+    "a celebrity photo of a {}",
+]
 
 
 def prompt_sets(args) -> Dict[str, Tuple[List[str], List[str]]]:
     if args.dataset == "waterbirds":
         return {
             "words": (POS_WORDS, NEG_WORDS),
-            "sentences": ([f"a photo of a bird {p}" for p in WATER_PLACES],
-                          [f"a photo of a bird {p}" for p in LAND_PLACES]),
-            "ensemble": ([t.format(p) for t in WB_TEMPLATES for p in WATER_PLACES],
-                         [t.format(p) for t in WB_TEMPLATES for p in LAND_PLACES]),
+            "sentences": (
+                [f"a photo of a bird {p}" for p in WATER_PLACES],
+                [f"a photo of a bird {p}" for p in LAND_PLACES],
+            ),
+            "ensemble": (
+                [t.format(p) for t in WB_TEMPLATES for p in WATER_PLACES],
+                [t.format(p) for t in WB_TEMPLATES for p in LAND_PLACES],
+            ),
         }
     sets = {"library": get_concept_prompts(args.concept_attr)}
     if args.concept_attr == "Male":
-        sets["ensemble"] = ([t.format(n) for t in FACE_TEMPLATES for n in MALE_NOUNS],
-                            [t.format(n) for t in FACE_TEMPLATES for n in FEMALE_NOUNS])
+        sets["ensemble"] = (
+            [t.format(n) for t in FACE_TEMPLATES for n in MALE_NOUNS],
+            [t.format(n) for t in FACE_TEMPLATES for n in FEMALE_NOUNS],
+        )
     return sets
 
 
 def parse_args():
     cfg = DebiasingConfig()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--dataset", default="waterbirds", choices=["waterbirds", "celeba"])
+    parser.add_argument(
+        "--dataset", default="waterbirds", choices=["waterbirds", "celeba"]
+    )
     parser.add_argument("--celeba_root", default=cfg.celeba_root)
     parser.add_argument("--target_attr", default="Blond_Hair")
     parser.add_argument("--concept_attr", default="Male")
-    parser.add_argument("--max_train", type=int, default=30000,
-                        help="Random subset of the train split (CelebA train is 162k)")
+    parser.add_argument(
+        "--max_train",
+        type=int,
+        default=30000,
+        help="Random subset of the train split (CelebA train is 162k)",
+    )
     parser.add_argument("--out_dir", default=None)
     parser.add_argument("--clip_model", default=cfg.clip_model)
     parser.add_argument("--ks", nargs="+", type=int, default=[1, 2, 3, 5, 8, 13, 24])
@@ -107,7 +139,8 @@ def parse_args():
     args = parser.parse_args()
     if args.out_dir is None:
         args.out_dir = (
-            "./results_waterbirds/clip_target_probe" if args.dataset == "waterbirds"
+            "./results_waterbirds/clip_target_probe"
+            if args.dataset == "waterbirds"
             else f"./results/clip_target_probe/{args.target_attr}_{args.concept_attr}"
         )
     return args
@@ -122,18 +155,28 @@ def build_split(args, split: str):
         return WaterbirdsDebiasDataset(
             {"train": "train", "val": "validation", "test": "test"}[split], transform=tf
         )
-    ds = CelebADebias(args.celeba_root, {"train": "train", "val": "valid", "test": "test"}[split],
-                      args.target_attr, args.concept_attr, transform=tf)
+    ds = CelebADebias(
+        args.celeba_root,
+        {"train": "train", "val": "valid", "test": "test"}[split],
+        args.target_attr,
+        args.concept_attr,
+        transform=tf,
+    )
     if split == "train" and len(ds) > args.max_train:
-        idx = np.random.default_rng(args.seed).choice(len(ds), args.max_train, replace=False)
+        idx = np.random.default_rng(args.seed).choice(
+            len(ds), args.max_train, replace=False
+        )
         ds = Subset(ds, np.sort(idx).tolist())
     return ds
 
 
 def encode_splits(oracle: CLIPOracle, args) -> Dict[str, Dict[str, np.ndarray]]:
     """V_I, task label y and concept label c per split; cached as .npz in out_dir."""
-    cache = os.path.join(args.out_dir, f"clip_embeds_{args.clip_model.replace('/', '_')}"
-                         f"_train{args.max_train}_seed{args.seed}.npz")
+    cache = os.path.join(
+        args.out_dir,
+        f"clip_embeds_{args.clip_model.replace('/', '_')}"
+        f"_train{args.max_train}_seed{args.seed}.npz",
+    )
     if os.path.isfile(cache):
         print(f"Loading cached embeddings from {cache}")
         z = np.load(cache)
@@ -142,15 +185,21 @@ def encode_splits(oracle: CLIPOracle, args) -> Dict[str, Dict[str, np.ndarray]]:
     renorm = RenormalizeForCLIP().to(oracle.device)
     data, flat = {}, {}
     for split in SPLITS:
-        loader = DataLoader(build_split(args, split), batch_size=args.batch_size,
-                            num_workers=args.num_workers)
+        loader = DataLoader(
+            build_split(args, split),
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+        )
         v_i, ys, cs = [], [], []
         for images, y, c in loader:
             v_i.append(oracle.encode_images(renorm(images.to(oracle.device))).cpu())
             ys.append(y)
             cs.append(c)
-        data[split] = {"v_i": torch.cat(v_i).float().numpy(),
-                       "y": torch.cat(ys).numpy(), "c": torch.cat(cs).numpy()}
+        data[split] = {
+            "v_i": torch.cat(v_i).float().numpy(),
+            "y": torch.cat(ys).numpy(),
+            "c": torch.cat(cs).numpy(),
+        }
         print(f"  encoded {split}: {data[split]['v_i'].shape}")
         flat.update({f"{split}_{k}": v for k, v in data[split].items()})
     np.savez(cache, **flat)
@@ -173,7 +222,10 @@ def orth_eraser(basis: np.ndarray) -> Callable:
 
 def leace_eraser(x_fit: np.ndarray, cross_cov: np.ndarray) -> Callable:
     """Whitened (LEACE-style) eraser — same fit as training (clip_oracle.fit_leace)."""
-    mu, M = (t.double().numpy() for t in fit_leace(torch.from_numpy(x_fit), torch.from_numpy(cross_cov)))
+    mu, M = (
+        t.double().numpy()
+        for t in fit_leace(torch.from_numpy(x_fit), torch.from_numpy(cross_cov))
+    )
     return lambda x: _renorm(x - (x - mu) @ M.T)
 
 
@@ -195,7 +247,11 @@ def text_basis(oracle, pos, neg, k_max) -> Tuple[np.ndarray, np.ndarray]:
 def zeroshot_labels(oracle, pos, neg, x: np.ndarray) -> np.ndarray:
     """CLIP zero-shot concept prediction: closer to the mean pos or mean neg prompt."""
     with torch.no_grad():
-        d = (oracle.encode_text(pos).mean(0) - oracle.encode_text(neg).mean(0)).cpu().numpy()
+        d = (
+            (oracle.encode_text(pos).mean(0) - oracle.encode_text(neg).mean(0))
+            .cpu()
+            .numpy()
+        )
     return (x @ d > 0).astype(int)
 
 
@@ -223,8 +279,12 @@ def fit_predict(X_train, y_train, X_test, seed: int) -> np.ndarray:
 
 
 def worst_group(preds, y, c) -> float:
-    return min((preds[m] == y[m]).mean()
-               for a in (0, 1) for b in (0, 1) if (m := (y == a) & (c == b)).any())
+    return min(
+        (preds[m] == y[m]).mean()
+        for a in (0, 1)
+        for b in (0, 1)
+        if (m := (y == a) & (c == b)).any()
+    )
 
 
 def evaluate(data, erase: Callable, seed: int) -> Dict[str, float]:
@@ -232,8 +292,12 @@ def evaluate(data, erase: Callable, seed: int) -> Dict[str, float]:
     X = {s: erase(data[s]["v_i"]) for s in SPLITS}
     task_pred = fit_predict(X["train"], tr["y"], X["test"], seed)
     return {
-        "concept_v2t": float((fit_predict(X["val"], va["c"], X["test"], seed) == te["c"]).mean()),
-        "concept_t2t": float((fit_predict(X["train"], tr["c"], X["test"], seed) == te["c"]).mean()),
+        "concept_v2t": float(
+            (fit_predict(X["val"], va["c"], X["test"], seed) == te["c"]).mean()
+        ),
+        "concept_t2t": float(
+            (fit_predict(X["train"], tr["c"], X["test"], seed) == te["c"]).mean()
+        ),
         "task_acc": float((task_pred == te["y"]).mean()),
         "task_wga": float(worst_group(task_pred, te["y"], te["c"])),
     }
@@ -244,8 +308,10 @@ def basis_stats(x: np.ndarray, basis: np.ndarray) -> Dict[str, float]:
         return {"energy": 0.0, "var_ratio": ""}
     per_dim = np.var(x, axis=0).sum() / x.shape[1]
     proj = x @ basis.T
-    return {"energy": float((proj ** 2).sum(1).mean()),
-            "var_ratio": float(proj.var(0).mean() / per_dim)}
+    return {
+        "energy": float((proj**2).sum(1).mean()),
+        "var_ratio": float(proj.var(0).mean() / per_dim),
+    }
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -271,22 +337,30 @@ def main():
     print("\nPrompt-set diagnostics")
     for name, (pos, neg) in prompt_sets(args).items():
         full, sv = text_basis(oracle, pos, neg, max(ks))
-        share = sv ** 2 / (sv ** 2).sum()
+        share = sv**2 / (sv**2).sum()
         zs = zeroshot_labels(oracle, pos, neg, data["test"]["v_i"])
-        print(f"  {name:<10} pairs={len(sv):>2}  top-5 variance share of diffs: "
-              f"{np.round(share[:5], 3).tolist()}")
-        print(f"  {'':<10} |cos(top text dir, image mean-diff)| = "
-              f"{abs(full[0] @ md) / np.linalg.norm(md):.3f}   "
-              f"zero-shot concept acc (test) = {(zs == data['test']['c']).mean():.3f}")
+        print(
+            f"  {name:<10} pairs={len(sv):>2}  top-5 variance share of diffs: "
+            f"{np.round(share[:5], 3).tolist()}"
+        )
+        print(
+            f"  {'':<10} |cos(top text dir, image mean-diff)| = "
+            f"{abs(full[0] @ md) / np.linalg.norm(md):.3f}   "
+            f"zero-shot concept acc (test) = {(zs == data['test']['c']).mean():.3f}"
+        )
         for k in sorted({min(k, len(full)) for k in ks}):
             b = full[:k].astype(np.float64)
             configs.append((f"orth:{name}", k, True, orth_eraser(b), b))
             # cross-covariance of x with its own text-subspace scores = Σ bᵀ
-            configs.append((f"leace:{name}", k, True, leace_eraser(x_tr, cov @ b.T), None))
+            configs.append(
+                (f"leace:{name}", k, True, leace_eraser(x_tr, cov @ b.T), None)
+            )
         z = zeroshot_labels(oracle, pos, neg, x_tr)
         if 0 < z.mean() < 1:
             cc = ((x_tr - x_tr.mean(0)) * (z - z.mean())[:, None]).mean(0)[:, None]
-            configs.append((f"leace:zeroshot_{name}", 1, True, leace_eraser(x_tr, cc), None))
+            configs.append(
+                (f"leace:zeroshot_{name}", 1, True, leace_eraser(x_tr, cc), None)
+            )
 
     rng = np.random.default_rng(args.seed)
     q, _ = np.linalg.qr(rng.standard_normal((dim, max(ks))))
@@ -302,17 +376,25 @@ def main():
             configs.append(("oracle:inlp", len(b), False, orth_eraser(b), b))
 
     rows = []
-    hdr = (f"\n{'source':<24}{'k':>4}{'energy':>9}{'var_ratio':>10}{'concept_v2t':>13}"
-           f"{'concept_t2t':>13}{'task_acc':>10}{'task_wga':>10}")
+    hdr = (
+        f"\n{'source':<24}{'k':>4}{'energy':>9}{'var_ratio':>10}{'concept_v2t':>13}"
+        f"{'concept_t2t':>13}{'task_acc':>10}{'task_wga':>10}"
+    )
     print(hdr)
     for source, k, label_free, erase, basis in configs:
-        stats = basis_stats(x_tr, basis) if basis is not None else {"energy": "", "var_ratio": ""}
+        stats = (
+            basis_stats(x_tr, basis)
+            if basis is not None
+            else {"energy": "", "var_ratio": ""}
+        )
         m = evaluate(data, erase, args.seed)
         rows.append({"source": source, "k": k, "label_free": label_free, **stats, **m})
         fmt = lambda v, w: f"{v:>{w}.4f}" if isinstance(v, float) else f"{'-':>{w}}"
-        print(f"{source:<24}{k:>4}{fmt(stats['energy'], 9)}{fmt(stats['var_ratio'], 10)}"
-              f"{m['concept_v2t']:>13.4f}{m['concept_t2t']:>13.4f}"
-              f"{m['task_acc']:>10.4f}{m['task_wga']:>10.4f}")
+        print(
+            f"{source:<24}{k:>4}{fmt(stats['energy'], 9)}{fmt(stats['var_ratio'], 10)}"
+            f"{m['concept_v2t']:>13.4f}{m['concept_t2t']:>13.4f}"
+            f"{m['task_acc']:>10.4f}{m['task_wga']:>10.4f}"
+        )
 
     out_csv = os.path.join(args.out_dir, "probe_summary.csv")
     with open(out_csv, "w", newline="") as f:
