@@ -45,7 +45,12 @@ from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-from .clip_oracle import CLIPOracle, Eraser, compute_distillation_targets
+from .clip_oracle import (
+    CLIPOracle,
+    Eraser,
+    compute_distillation_targets,
+    whitened_concept_scores,
+)
 from .clip_preprocess import RenormalizeForCLIP
 from .evaluate import extract_features, train_linear_probe, worst_group_accuracy
 from .losses import BackboneLoss, ProjHeadLoss
@@ -96,6 +101,12 @@ class Trainer:
     oracle   : CLIPOracle (frozen); None for ERM mode
     subspace : (k, D) orthonormal concept subspace; None for ERM mode.
                Pass a (1, D) tensor to reproduce single-direction behaviour.
+    eraser   : fitted whitened eraser; required when cfg.eraser == "leace" or
+               cfg.repulse == "whitened"
+    val_pseudo_concepts : (N_val,) CLIP zero-shot concept labels aligned with the
+               (unshuffled) val loader.  If given, the epoch with the best
+               pseudo-group val WGA is saved as best_pseudo_wga.pt — a
+               label-free counterpart of best_wga.pt.
     """
 
     def __init__(
@@ -105,6 +116,7 @@ class Trainer:
         oracle: CLIPOracle | None = None,
         subspace: torch.Tensor | None = None,
         eraser: Eraser | None = None,
+        val_pseudo_concepts: torch.Tensor | None = None,
     ):
         self.model = model
         self.cfg = cfg
@@ -120,15 +132,20 @@ class Trainer:
 
         self.oracle = oracle
         self.subspace = subspace.to(self.device) if subspace is not None else None
-        # Whitened eraser (mu, M) for V_I_perp; None → orthogonal projection
-        self.eraser = (
-            tuple(t.to(self.device) for t in eraser) if eraser is not None else None
-        )
-        if not self._erm_mode and (cfg.eraser == "leace") != (self.eraser is not None):
+        # Whitened eraser: V_I_perp (cfg.eraser="leace") and/or the concept
+        # scores for the decorrelation repulse (cfg.repulse="whitened")
+        self.eraser = eraser.to(self.device) if eraser is not None else None
+        needs_eraser = cfg.eraser == "leace" or cfg.repulse == "whitened"
+        if not self._erm_mode and needs_eraser and self.eraser is None:
             raise ValueError(
-                f"cfg.eraser={cfg.eraser!r} but an eraser was "
-                f"{'not ' if self.eraser is None else ''}passed to Trainer"
+                f"cfg.eraser={cfg.eraser!r}, cfg.repulse={cfg.repulse!r} need an "
+                "eraser, but none was passed to Trainer"
             )
+        self._target_eraser = self.eraser if cfg.eraser == "leace" else None
+        self._whitened_repulse = cfg.repulse == "whitened"
+        self.val_pseudo_concepts = (
+            val_pseudo_concepts.cpu().numpy() if val_pseudo_concepts is not None else None
+        )
         self.renorm = (
             RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
         )
@@ -173,6 +190,7 @@ class Trainer:
         self._write_config()
         self._best_val_acc = 0.0
         self._best_val_wga: float = -1.0
+        self._best_val_pseudo_wga: float = -1.0
 
     def _write_config(self):
         payload = {
@@ -248,7 +266,7 @@ class Trainer:
             clip_images,
             self.subspace,
             renormalize=True,
-            eraser=self.eraser,
+            eraser=self._target_eraser,
         )
 
         with autocast(self._device_type, enabled=self.cfg.amp):
@@ -259,6 +277,8 @@ class Trainer:
                 proj=out["proj"],
                 v_i_perp=v_i_perp,
                 subspace=self.subspace,
+                embed=out["embed"],
+                concept_scores=self._concept_scores(v_i),
             )
 
         l_task, l_align, l_repulse = (
@@ -360,6 +380,11 @@ class Trainer:
             self.cfg.lambda_repulse_decay_schedule,
         )
 
+    def _concept_scores(self, v_i: torch.Tensor | None) -> torch.Tensor | None:
+        if not self._whitened_repulse or v_i is None:
+            return None
+        return whitened_concept_scores(v_i.float(), self.eraser)
+
     # ── Single training step ──────────────────────────────────────────────────
 
     def _train_step(self, images: torch.Tensor, labels: torch.Tensor):
@@ -378,7 +403,7 @@ class Trainer:
                     clip_images,
                     self.subspace,
                     renormalize=True,
-                    eraser=self.eraser,
+                    eraser=self._target_eraser,
                 )
 
         with autocast(self._device_type, enabled=self.cfg.amp):
@@ -397,6 +422,8 @@ class Trainer:
                 proj=out["proj"],
                 v_i_perp=v_i_perp,
                 subspace=self.subspace,
+                embed=out["embed"],
+                concept_scores=self._concept_scores(v_i),
             )
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
@@ -556,6 +583,14 @@ class Trainer:
                 preds=val_feats["preds"],
             )
             print(f"    val   — val_wga: {val_wga:.4f}")
+            val_pseudo_wga = None
+            if self.val_pseudo_concepts is not None:
+                _, val_pseudo_wga = worst_group_accuracy(
+                    targets=val_feats["targets"],
+                    concepts=self.val_pseudo_concepts,
+                    preds=val_feats["preds"],
+                )
+                print(f"    val   — val_pseudo_wga: {val_pseudo_wga:.4f}")
             self.model.train()
 
             ckpt = os.path.join(self.ckpt_dir, f"epoch_{epoch:02d}.pt")
@@ -567,6 +602,7 @@ class Trainer:
                     "opt_proj": self.optimizer_proj.state_dict(),
                     "val_acc": val["val_acc"],
                     "val_wga": val_wga,
+                    "val_pseudo_wga": val_pseudo_wga,
                     "run_name": self.cfg.run_name,
                     "seed": self.cfg.seed,
                     "subspace_k": (
@@ -587,6 +623,12 @@ class Trainer:
                 best_wga = os.path.join(self.ckpt_dir, "best_wga.pt")
                 torch.save(self.model.state_dict(), best_wga)
                 print(f"    ✓ best val_wga={val_wga:.4f}  → {best_wga}")
+
+            if val_pseudo_wga is not None and val_pseudo_wga > self._best_val_pseudo_wga:
+                self._best_val_pseudo_wga = val_pseudo_wga
+                best_pseudo = os.path.join(self.ckpt_dir, "best_pseudo_wga.pt")
+                torch.save(self.model.state_dict(), best_pseudo)
+                print(f"    ✓ best val_pseudo_wga={val_pseudo_wga:.4f}  → {best_pseudo}")
 
         print()
         return os.path.join(self.ckpt_dir, "best_wga.pt")

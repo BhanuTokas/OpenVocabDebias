@@ -173,7 +173,7 @@ def orth_eraser(basis: np.ndarray) -> Callable:
 
 def leace_eraser(x_fit: np.ndarray, cross_cov: np.ndarray) -> Callable:
     """Whitened (LEACE-style) eraser — same fit as training (clip_oracle.fit_leace)."""
-    mu, M = (t.double().numpy() for t in fit_leace(torch.from_numpy(x_fit), torch.from_numpy(cross_cov)))
+    mu, M, _ = (t.double().numpy() for t in fit_leace(torch.from_numpy(x_fit), torch.from_numpy(cross_cov)))
     return lambda x: _renorm(x - (x - mu) @ M.T)
 
 

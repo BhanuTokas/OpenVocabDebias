@@ -48,6 +48,7 @@ from clip_debias.config import (
     disable_lambda_schedules,
     use_scratch_backbone,
     use_leace_eraser,
+    use_whitened_repulse,
     use_group_reweighting,
     repulse_only_config,
 )
@@ -221,6 +222,21 @@ def parse_args():
         "(label-free). Runs using the alignment target get a '_leace' suffix.",
     )
     parser.add_argument(
+        "--repulse",
+        default="orth",
+        choices=["orth", "whitened"],
+        help="What L_repulse penalises: P(E(x)) along the text-subspace basis, or "
+        "the batch correlation between E(x) and the whitened CLIP concept scores "
+        "(label-free). Runs with lambda_repulse > 0 get a '_wrep' suffix.",
+    )
+    parser.add_argument(
+        "--lambda_repulse",
+        type=float,
+        default=None,
+        help="Override lambda_repulse for runs that have a repulse term "
+        "(adds a '_lrep<value>' suffix). Default: each run config's own value.",
+    )
+    parser.add_argument(
         "--group_reweight",
         default="none",
         choices=["none", "pseudo", "oracle"],
@@ -268,34 +284,44 @@ def main():
     )
 
     # ── Load CLIP and compute concept subspace (once, shared across all runs) ─
-    need_clip = any(r != "erm" for r in args.runs) or args.group_reweight != "none"
-    oracle = subspace = None
-    if need_clip:
-        print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
-        oracle = CLIPOracle(ref_cfg.clip_model, device=device)
+    # CLIP is always loaded: val pseudo-labels drive best_pseudo_wga.pt for every run
+    print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
+    oracle = CLIPOracle(ref_cfg.clip_model, device=device)
 
-        # pos_words = get_synonyms("water")
-        # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
-        print(f"  pos: {POS_WORDS}")
-        print(f"  neg: {NEG_WORDS}")
+    # pos_words = get_synonyms("water")
+    # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
+    print(f"  pos: {POS_WORDS}")
+    print(f"  neg: {NEG_WORDS}")
 
-        print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
-        subspace = compute_concept_subspace(
-            oracle,
-            prompts_pos=POS_WORDS,
-            prompts_neg=NEG_WORDS,
-            k=args.concept_subspace_k,
-        )
-        print(f"  subspace shape: {tuple(subspace.shape)}")
+    print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
+    subspace = compute_concept_subspace(
+        oracle,
+        prompts_pos=POS_WORDS,
+        prompts_neg=NEG_WORDS,
+        k=args.concept_subspace_k,
+    )
+    print(f"  subspace shape: {tuple(subspace.shape)}")
+
+    # ── Val pseudo-labels: label-free checkpoint selection (best_pseudo_wga.pt) ─
+    print("\nEmbedding the val split with CLIP …")
+    v_va, _, c_va = embed_dataset(
+        oracle, val_loader.dataset, num_workers=ref_cfg.num_workers
+    )
+    val_pseudo = zeroshot_concept_labels(oracle, POS_WORDS, NEG_WORDS, v_va)
+    print(
+        "  zero-shot concept accuracy on val (reported only, not used): "
+        f"{(val_pseudo == c_va).float().mean():.4f}"
+    )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
+    need_eraser = args.eraser == "leace" or args.repulse == "whitened"
     eraser = train_groups = None
-    if args.eraser == "leace" or args.group_reweight != "none":
+    if need_eraser or args.group_reweight != "none":
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
             oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
         )
-        if args.eraser == "leace":
+        if need_eraser:
             eraser = fit_leace_eraser(v_tr, subspace)
             print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
         if args.group_reweight == "pseudo":
@@ -335,12 +361,18 @@ def main():
                 sequential_phase_switch_epoch=args.sequential_switch_epoch,
             )
             cfg.concept_attr = "place"
+            cfg.concept_prompts_pos, cfg.concept_prompts_neg = POS_WORDS, NEG_WORDS
             if args.no_lambda_schedules:
                 cfg = disable_lambda_schedules(cfg)
             if args.scratch:
                 cfg = use_scratch_backbone(cfg)
             if args.eraser == "leace":
                 cfg = use_leace_eraser(cfg)
+            if args.repulse == "whitened":
+                cfg = use_whitened_repulse(cfg)
+            if args.lambda_repulse is not None and cfg.lambda_repulse > 0:
+                cfg.lambda_repulse = args.lambda_repulse
+                cfg.run_name += f"_lrep{args.lambda_repulse:g}"
             if args.group_reweight != "none":
                 cfg = use_group_reweighting(cfg, args.group_reweight)
 
@@ -355,6 +387,7 @@ def main():
                 oracle=None if is_erm else oracle,
                 subspace=None if is_erm else subspace,
                 eraser=None if is_erm else eraser,
+                val_pseudo_concepts=val_pseudo,
             )
             fit_loader = (
                 group_balanced_loader(train_loader, *train_groups, seed=seed)

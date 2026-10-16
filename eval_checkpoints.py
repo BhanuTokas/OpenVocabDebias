@@ -7,8 +7,15 @@ checkpoint (default: best.pt and best_wga.pt) on the test split and appends one
 row per (run, checkpoint) to a summary CSV.  Each row reports the concept probe
 on both E(x) and P(E(x)), task accuracy and worst-group accuracy.
 
-    best.pt     — selected by val accuracy  (label-free model selection)
-    best_wga.pt — selected by val WGA       (needs concept labels on val)
+    best.pt            — selected by val accuracy      (label-free model selection)
+    best_wga.pt        — selected by val WGA           (needs concept labels on val)
+    best_pseudo_wga.pt — selected by pseudo-group val WGA, with CLIP zero-shot
+                         concept labels on val         (label-free)
+
+Runs trained before best_pseudo_wga.pt existed can get one after the fact with
+--pseudo_from_epochs: the epoch_XX.pt checkpoints are scored on val with CLIP
+pseudo-groups and the best one is written to the run dir (with a .json noting
+the chosen epoch).  Existing best_pseudo_wga.pt files are never overwritten.
 
 Run directories are folders containing at least one of the checkpoints.  New
 runs (<run_name>/seed_N/<timestamp>/) carry a config.json, which is used to
@@ -22,12 +29,17 @@ Usage
     python eval_checkpoints.py checkpoints_waterbirds/sched_control \\
         --out results_waterbirds/sched_control/eval_summary.csv
 
+    # Add label-free selection to runs that predate best_pseudo_wga.pt
+    python eval_checkpoints.py checkpoints_waterbirds/leace_pgrw --pseudo_from_epochs \\
+        --out results_waterbirds/leace_pgrw/eval_summary_pseudo.csv
+
     # Specific run dirs, CelebA path differs from the one in config.json
     python eval_checkpoints.py checkpoints/full/seed_42/20260710-115918 \\
         --celeba_root /data/hkerner/Datasets/CelebA/
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -38,9 +50,10 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-from clip_debias.config import DebiasingConfig
+from clip_debias.clip_oracle import CLIPOracle, embed_dataset, zeroshot_concept_labels
+from clip_debias.config import DebiasingConfig, get_concept_prompts
 from clip_debias.data import build_dataloaders
-from clip_debias.evaluate import run_evaluation
+from clip_debias.evaluate import extract_features, run_evaluation, worst_group_accuracy
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
@@ -48,7 +61,9 @@ from clip_debias.waterbirds_data import build_waterbirds_dataloaders
 SELECTION = {
     "best.pt": "val_acc",
     "best_wga.pt": "val_wga",
+    "best_pseudo_wga.pt": "val_pseudo_wga",
 }
+PSEUDO_CKPT = "best_pseudo_wga.pt"
 
 
 def parse_args():
@@ -59,6 +74,11 @@ def parse_args():
         "paths", nargs="+", help="Run dirs, or parent dirs to search recursively"
     )
     parser.add_argument("--ckpts", nargs="+", default=list(SELECTION))
+    parser.add_argument(
+        "--pseudo_from_epochs",
+        action="store_true",
+        help=f"Create {PSEUDO_CKPT} from epoch_XX.pt for runs that lack it",
+    )
     parser.add_argument("--out", default="./results_eval/eval_summary.csv")
     parser.add_argument(
         "--celeba_root",
@@ -132,6 +152,45 @@ def load_run_cfg(run_dir: str, args) -> Tuple[DebiasingConfig, str, str]:
     return cfg, dataset, source
 
 
+def concept_prompts(cfg: DebiasingConfig, dataset: str) -> Tuple[List[str], List[str]]:
+    """Prompts the run used for its concept (Waterbirds configs before Oct 2026
+    recorded the CelebA defaults, so Waterbirds always uses the script's words)."""
+    if dataset == "waterbirds":
+        from waterbirds_train import NEG_WORDS, POS_WORDS
+
+        return POS_WORDS, NEG_WORDS
+    if cfg.concept_prompts_pos and cfg.concept_prompts_neg:
+        return cfg.concept_prompts_pos, cfg.concept_prompts_neg
+    return get_concept_prompts(cfg.concept_attr)
+
+
+def select_pseudo_best(run_dir: str, model, val_loader, val_pseudo: np.ndarray, cfg) -> bool:
+    """Write run_dir/best_pseudo_wga.pt from the epoch checkpoint with the best
+    pseudo-group val WGA (first one on ties, as in the trainer)."""
+    epoch_ckpts = sorted(glob.glob(os.path.join(run_dir, "epoch_*.pt")))
+    if not epoch_ckpts:
+        print(f"  [skip] no epoch_*.pt in {run_dir}; cannot create {PSEUDO_CKPT}")
+        return False
+    best = None
+    for path in epoch_ckpts:
+        state = torch.load(path, map_location=cfg.device)
+        model.load_state_dict(state["model_state"])
+        feats = extract_features(model, val_loader, cfg.device, use_amp=cfg.amp)
+        _, wga = worst_group_accuracy(feats["targets"], val_pseudo, feats["preds"])
+        print(f"    {os.path.basename(path)}  val_pseudo_wga={wga:.4f}")
+        if best is None or wga > best[0]:
+            best = (wga, state["epoch"], state["model_state"])
+    torch.save(best[2], os.path.join(run_dir, PSEUDO_CKPT))
+    with open(os.path.join(run_dir, "best_pseudo_wga.json"), "w") as f:
+        json.dump(
+            {"epoch": best[1], "val_pseudo_wga": best[0], "created_by": "eval_checkpoints.py"},
+            f,
+            indent=2,
+        )
+    print(f"  ✓ {PSEUDO_CKPT} ← epoch {best[1]}  (val_pseudo_wga={best[0]:.4f})")
+    return True
+
+
 def print_summary(rows: List[dict]):
     grouped: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     for r in rows:
@@ -146,9 +205,11 @@ def print_summary(rows: List[dict]):
     print(f"\n{'='*100}")
     print("  Summary (mean ± std across seeds)   probe = E(x), probe_proj = P(E(x))")
     print(f"{'='*100}")
-    print(f"  {'run':<22}{'ckpt':<13}" + "".join(f"{k:<22}" for k in metric_keys))
+    run_w = max([22] + [len(r) + 2 for r, _ in grouped])
+    ckpt_w = max([13] + [len(c) + 2 for _, c in grouped])
+    print(f"  {'run':<{run_w}}{'ckpt':<{ckpt_w}}" + "".join(f"{k:<22}" for k in metric_keys))
     for (run_name, ckpt), group in sorted(grouped.items()):
-        line = f"  {run_name:<22}{ckpt:<13}"
+        line = f"  {run_name:<{run_w}}{ckpt:<{ckpt_w}}"
         for k in metric_keys:
             vals = [g[k] for g in group]
             line += f"{np.mean(vals):.4f} ± {np.std(vals):.4f}     "
@@ -168,6 +229,8 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
 
     loader_cache: Dict[tuple, tuple] = {}
+    pseudo_cache: Dict[tuple, np.ndarray] = {}
+    oracle, oracle_name = None, None
     all_rows: List[dict] = []
 
     for run_dir in run_dirs:
@@ -180,9 +243,22 @@ def main():
                 loader_cache[key] = build_waterbirds_dataloaders(cfg)
             else:
                 loader_cache[key] = build_dataloaders(cfg)
-        train_loader, _val_loader, test_loader = loader_cache[key]
+        train_loader, val_loader, test_loader = loader_cache[key]
 
         model = build_model(cfg, num_classes=2)
+        if args.pseudo_from_epochs and not os.path.isfile(os.path.join(run_dir, PSEUDO_CKPT)):
+            pos, neg = concept_prompts(cfg, dataset)
+            pkey = key + (cfg.clip_model, tuple(pos), tuple(neg))
+            if pkey not in pseudo_cache:
+                if oracle is None or oracle_name != cfg.clip_model:
+                    print(f"\nLoading CLIP ({cfg.clip_model}) …")
+                    oracle, oracle_name = CLIPOracle(cfg.clip_model, device=cfg.device), cfg.clip_model
+                v_va, _, c_va = embed_dataset(oracle, val_loader.dataset, num_workers=args.num_workers)
+                c_hat = zeroshot_concept_labels(oracle, pos, neg, v_va)
+                print(f"  zero-shot concept accuracy on val: {(c_hat == c_va).float().mean():.4f}")
+                pseudo_cache[pkey] = c_hat.numpy()
+            print(f"\n[{cfg.run_name}  seed={cfg.seed}] selecting {PSEUDO_CKPT} from epoch checkpoints")
+            select_pseudo_best(run_dir, model, val_loader, pseudo_cache[pkey], cfg)
         for ckpt_name in args.ckpts:
             ckpt_path = os.path.join(run_dir, ckpt_name)
             if not os.path.isfile(ckpt_path):

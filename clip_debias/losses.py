@@ -18,6 +18,12 @@ L_align    : 1 - cos(P(E(x)), V_I_perp)
 L_repulse  : mean( sum_k (P(E(x)) · b_k)^2 )  where b_k are the subspace bases.
              Penalises alignment with every direction in the concept subspace.
              Gradient flows only into the backbone via the dual-optimizer setup.
+L_repulse  (repulse="whitened"):
+             sum_k mean_j corr_batch(E(x)_j, z_k)^2, where z = whitened CLIP
+             concept scores of the same images (clip_oracle.whitened_concept_scores).
+             Zero cross-covariance between E(x) and z means no linear probe on
+             E(x) predicts z better than a constant — the LEACE condition,
+             imposed on the backbone features instead of the target.
 """
 
 from __future__ import annotations
@@ -67,6 +73,28 @@ def repulsion_loss(
     return projections.pow(2).sum(dim=-1).mean()
 
 
+def decorrelation_loss(embed: torch.Tensor, scores: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Squared batch correlation between every feature of E(x) and every concept score.
+
+        L = sum_k mean_j corr(embed_j, scores_k)^2
+
+    Parameters
+    ----------
+    embed  : (B, d) backbone features E(x)
+    scores : (B, r) whitened CLIP concept scores (no gradient)
+
+    Under independence each corr^2 is ~1/B, so the floor is about r/B.
+    """
+    with torch.autocast(embed.device.type, enabled=False):
+        e = embed.float()
+        z = scores.float()
+        e = (e - e.mean(0)) / (e.std(0) + eps)
+        z = (z - z.mean(0)) / (z.std(0) + eps)
+        corr = e.T @ z / (e.shape[0] - 1)  # (d, r)
+        return corr.pow(2).mean(0).sum()
+
+
 # ── Loss group wrappers ───────────────────────────────────────────────────────
 
 
@@ -98,6 +126,7 @@ class BackboneLoss(nn.Module):
         self.lambda_task = cfg.lambda_task
         self.lambda_align = cfg.lambda_align
         self.lambda_repulse = cfg.lambda_repulse
+        self.whitened_repulse = cfg.repulse == "whitened"
 
     def forward(
         self,
@@ -108,6 +137,8 @@ class BackboneLoss(nn.Module):
         subspace: torch.Tensor | None = None,  # (k, D) concept subspace
         # Legacy single-direction argument kept for backwards compatibility:
         v_t_hat: torch.Tensor | None = None,  # (D,) — auto-converted to (1, D)
+        embed: torch.Tensor | None = None,  # (B, d) E(x), for repulse="whitened"
+        concept_scores: torch.Tensor | None = None,  # (B, r) whitened CLIP scores
     ):
         l_task = task_loss(logits, labels)
 
@@ -122,11 +153,16 @@ class BackboneLoss(nn.Module):
         if _subspace is None and v_t_hat is not None:
             _subspace = v_t_hat.unsqueeze(0)  # (D,) → (1, D)
 
-        l_repulse = (
-            repulsion_loss(proj, _subspace)
-            if (self.lambda_repulse > 0 and _subspace is not None)
-            else logits.new_zeros(())
-        )
+        if self.lambda_repulse <= 0:
+            l_repulse = logits.new_zeros(())
+        elif self.whitened_repulse:
+            if embed is None or concept_scores is None:
+                raise ValueError("repulse='whitened' needs embed and concept_scores")
+            l_repulse = decorrelation_loss(embed, concept_scores)
+        elif _subspace is not None:
+            l_repulse = repulsion_loss(proj, _subspace)
+        else:
+            l_repulse = logits.new_zeros(())
 
         total = (
             self.lambda_task * l_task

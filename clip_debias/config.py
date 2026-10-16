@@ -278,6 +278,13 @@ class DebiasingConfig:
     #             covariance (label-free; see clip_oracle.fit_leace_eraser)
     eraser: str = "orth"
 
+    # What L_repulse penalises:
+    #   "orth"     — sum_k (P(E(x)) · b_k)^2 over the text-subspace basis (original)
+    #   "whitened" — squared batch correlation between E(x) and the whitened CLIP
+    #                concept scores of the same images (needs the fitted eraser;
+    #                see losses.decorrelation_loss)
+    repulse: str = "orth"
+
     # Group-balanced resampling of the train set over (target × concept) groups:
     #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
     #   | "oracle" (true concept labels — reference upper bound only)
@@ -389,6 +396,17 @@ def use_leace_eraser(cfg: DebiasingConfig) -> DebiasingConfig:
     if cfg.lambda_align > 0:
         cfg.eraser = "leace"
         cfg.run_name += "_leace"
+    return cfg
+
+
+def use_whitened_repulse(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Replace L_repulse with the E(x)–concept-score decorrelation loss.
+
+    Only affects runs with lambda_repulse > 0; those get a "_wrep" suffix.
+    """
+    if cfg.lambda_repulse > 0:
+        cfg.repulse = "whitened"
+        cfg.run_name += "_wrep"
     return cfg
 
 

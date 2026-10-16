@@ -29,7 +29,7 @@ diverge in the training logs.  If they still track each other, increase k.
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -218,7 +218,13 @@ def orthogonal_project(
 # in V_I that linearly covaries with the text-subspace scores, using only the
 # unlabeled image covariance — still label-free.
 
-Eraser = Tuple[torch.Tensor, torch.Tensor]  # (mu (D,), M (D, D))
+class Eraser(NamedTuple):
+    mu: torch.Tensor  # (D,)   train-set mean of V_I
+    M: torch.Tensor  # (D, D) erasure map:  x' = x − (x − μ) Mᵀ
+    R: torch.Tensor  # (r, D) whitened concept scores:  z = (x − μ) Rᵀ  (unit variance, decorrelated)
+
+    def to(self, device) -> "Eraser":
+        return Eraser(*(t.to(device) for t in self))
 
 
 def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Eraser:
@@ -228,7 +234,8 @@ def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Er
     variable(s) to erase — in whitened coordinates:
         x' = x − (x − μ) Mᵀ,   M = W⁺ Q Qᵀ W,   W = Σ^{-1/2},
     with Q an orthonormal basis of W·cross_cov.  Afterwards no linear function
-    of x' covaries with those variables.  Fit in float64 on CPU.
+    of x' covaries with those variables.  Also returns R = Qᵀ W, which maps x
+    to the whitened scores of what the eraser removes.  Fit in float64 on CPU.
     """
     x = x.detach().double().cpu()
     mu = x.mean(0)
@@ -237,7 +244,7 @@ def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Er
     W = (evecs / evals.sqrt()) @ evecs.T
     W_pinv = (evecs * evals.sqrt()) @ evecs.T
     Q, _ = torch.linalg.qr(W @ cross_cov.detach().double().cpu())
-    return mu.float(), (W_pinv @ Q @ Q.T @ W).float()
+    return Eraser(mu.float(), (W_pinv @ Q @ Q.T @ W).float(), (Q.T @ W).float())
 
 
 def fit_leace_eraser(v_i: torch.Tensor, subspace: torch.Tensor) -> Eraser:
@@ -249,8 +256,13 @@ def fit_leace_eraser(v_i: torch.Tensor, subspace: torch.Tensor) -> Eraser:
 
 
 def leace_project(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:
-    mu, M = eraser
-    return v_i - (v_i - mu) @ M.T
+    return v_i - (v_i - eraser.mu) @ eraser.M.T
+
+
+def whitened_concept_scores(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:
+    """(B, r) label-free concept scores of V_I: its text-subspace scores,
+    centred and whitened with the train-set image covariance."""
+    return (v_i - eraser.mu) @ eraser.R.T
 
 
 @torch.no_grad()
@@ -306,7 +318,7 @@ def compute_distillation_targets(
     subspace     : (k, D) orthonormal concept subspace
                    (pass a (1, D) tensor to replicate the single-direction case)
     renormalize  : whether to L2-normalise V_I_perp before returning
-    eraser       : (mu, M) from fit_leace_eraser — if given, V_I_perp uses the
+    eraser       : Eraser from fit_leace_eraser — if given, V_I_perp uses the
                    whitened eraser instead of orthogonal projection of `subspace`
 
     Returns
