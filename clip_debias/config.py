@@ -272,6 +272,17 @@ class DebiasingConfig:
     # Ablate k=1,2,3,5 to find optimal dimensionality.
     concept_subspace_k: int = 3
 
+    # How V_I_perp is formed from the subspace:
+    #   "orth"  — orthogonal projection (original)
+    #   "leace" — whitened LEACE-style erasure using the train-set CLIP image
+    #             covariance (label-free; see clip_oracle.fit_leace_eraser)
+    eraser: str = "orth"
+
+    # Group-balanced resampling of the train set over (target × concept) groups:
+    #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
+    #   | "oracle" (true concept labels — reference upper bound only)
+    group_reweight: str = "none"
+
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
     # Override by passing concept_prompts_pos / concept_prompts_neg explicitly.
@@ -366,6 +377,27 @@ def use_scratch_backbone(cfg: DebiasingConfig) -> DebiasingConfig:
     """
     cfg.pretrained = False
     cfg.run_name += "_scratch"
+    return cfg
+
+
+def use_leace_eraser(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Form V_I_perp with the whitened eraser instead of orthogonal projection.
+
+    Only affects runs that use the alignment target (lambda_align > 0); those
+    get a "_leace" suffix.  Other runs are returned unchanged.
+    """
+    if cfg.lambda_align > 0:
+        cfg.eraser = "leace"
+        cfg.run_name += "_leace"
+    return cfg
+
+
+def use_group_reweighting(cfg: DebiasingConfig, mode: str) -> DebiasingConfig:
+    """Train on group-balanced resampled batches; appends "_grw_<mode>"."""
+    if mode not in ("pseudo", "oracle"):
+        raise ValueError(f"group_reweight must be 'pseudo' or 'oracle', got {mode!r}")
+    cfg.group_reweight = mode
+    cfg.run_name += f"_grw_{mode}"
     return cfg
 
 

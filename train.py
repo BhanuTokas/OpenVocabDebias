@@ -26,7 +26,13 @@ from typing import Dict, List
 import numpy as np
 import torch
 
-from clip_debias.clip_oracle import CLIPOracle, compute_concept_subspace
+from clip_debias.clip_oracle import (
+    CLIPOracle,
+    compute_concept_subspace,
+    embed_dataset,
+    fit_leace_eraser,
+    zeroshot_concept_labels,
+)
 from clip_debias.config import (
     erm_config,
     align_only_config,
@@ -36,12 +42,15 @@ from clip_debias.config import (
     sequential_config,
     disable_lambda_schedules,
     use_scratch_backbone,
+    use_leace_eraser,
+    use_group_reweighting,
     get_concept_prompts,
 )
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
+from clip_debias.reweight import group_balanced_loader
 from clip_debias.trainer import Trainer
 
 RUN_FACTORIES = {
@@ -139,6 +148,22 @@ def parse_args():
         help="Randomly initialise the backbone instead of loading ImageNet weights. "
         "All runs get a '_scratch' suffix; raise --epochs/--lr accordingly.",
     )
+    parser.add_argument(
+        "--eraser",
+        default="orth",
+        choices=["orth", "leace"],
+        help="How V_I_perp is formed: orthogonal projection of the text subspace, "
+        "or whitened LEACE-style erasure fit on the train-set CLIP image covariance "
+        "(label-free). Runs using the alignment target get a '_leace' suffix.",
+    )
+    parser.add_argument(
+        "--group_reweight",
+        default="none",
+        choices=["none", "pseudo", "oracle"],
+        help="Group-balanced resampling over (target x concept) groups, with concept "
+        "labels from CLIP zero-shot prediction ('pseudo', label-free) or the "
+        "dataset ('oracle', reference only). Adds a '_grw_<mode>' suffix.",
+    )
     return parser.parse_args()
 
 
@@ -222,7 +247,7 @@ def main():
     )
 
     # ── Load CLIP and compute concept subspace (once, shared across all runs) ─
-    need_clip = any(r != "erm" for r in args.runs)
+    need_clip = any(r != "erm" for r in args.runs) or args.group_reweight != "none"
     oracle = subspace = None
     if need_clip:
         print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
@@ -235,6 +260,26 @@ def main():
             k=args.concept_subspace_k,
         )
         print(f"  subspace shape: {tuple(subspace.shape)}")
+
+    # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
+    eraser = train_groups = None
+    if args.eraser == "leace" or args.group_reweight != "none":
+        print("\nEmbedding the train split with CLIP …")
+        v_tr, y_tr, c_tr = embed_dataset(
+            oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
+        )
+        if args.eraser == "leace":
+            eraser = fit_leace_eraser(v_tr, subspace)
+            print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
+        if args.group_reweight == "pseudo":
+            c_hat = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_tr)
+            print(
+                "  zero-shot concept accuracy on train (reported only, not used): "
+                f"{(c_hat == c_tr).float().mean():.4f}"
+            )
+            train_groups = (y_tr, c_hat)
+        elif args.group_reweight == "oracle":
+            train_groups = (y_tr, c_tr)
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -255,6 +300,10 @@ def main():
                 cfg = disable_lambda_schedules(cfg)
             if args.scratch:
                 cfg = use_scratch_backbone(cfg)
+            if args.eraser == "leace":
+                cfg = use_leace_eraser(cfg)
+            if args.group_reweight != "none":
+                cfg = use_group_reweighting(cfg, args.group_reweight)
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"  Trainable params: {n_params:,}")
@@ -265,8 +314,14 @@ def main():
                 cfg=cfg,
                 oracle=None if is_erm else oracle,
                 subspace=None if is_erm else subspace,
+                eraser=None if is_erm else eraser,
             )
-            best_ckpt = trainer.fit(train_loader, val_loader)
+            fit_loader = (
+                group_balanced_loader(train_loader, *train_groups, seed=seed)
+                if train_groups is not None
+                else train_loader
+            )
+            best_ckpt = trainer.fit(fit_loader, val_loader)
 
             model.load_state_dict(torch.load(best_ckpt, map_location=device))
 

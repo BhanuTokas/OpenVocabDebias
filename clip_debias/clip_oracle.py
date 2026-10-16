@@ -29,11 +29,14 @@ diverge in the training logs.  If they still track each other, increase k.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Tuple
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
 from transformers import CLIPModel, CLIPProcessor
+
+from .clip_preprocess import RenormalizeForCLIP
 
 # ── CLIP wrapper ──────────────────────────────────────────────────────────────
 
@@ -206,6 +209,79 @@ def orthogonal_project(
     return v_i - coeff * v_t_hat
 
 
+# ── Whitened (LEACE-style) erasure ────────────────────────────────────────────
+#
+# Orthogonal projection removes the component of V_I along the text directions,
+# but CLIP image embeddings are strongly anisotropic, so the concept stays
+# linearly decodable from correlated directions (probe_clip_target.py: place /
+# gender probes are unchanged by it).  The whitened eraser removes everything
+# in V_I that linearly covaries with the text-subspace scores, using only the
+# unlabeled image covariance — still label-free.
+
+Eraser = Tuple[torch.Tensor, torch.Tensor]  # (mu (D,), M (D, D))
+
+
+def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Eraser:
+    """LEACE-style eraser (Belrose et al. 2023) for features x (N, D).
+
+    Erases the span of `cross_cov` (D, r) — the covariance between x and the
+    variable(s) to erase — in whitened coordinates:
+        x' = x − (x − μ) Mᵀ,   M = W⁺ Q Qᵀ W,   W = Σ^{-1/2},
+    with Q an orthonormal basis of W·cross_cov.  Afterwards no linear function
+    of x' covaries with those variables.  Fit in float64 on CPU.
+    """
+    x = x.detach().double().cpu()
+    mu = x.mean(0)
+    evals, evecs = torch.linalg.eigh(torch.cov((x - mu).T))
+    evals = evals.clamp_min(eps)
+    W = (evecs / evals.sqrt()) @ evecs.T
+    W_pinv = (evecs * evals.sqrt()) @ evecs.T
+    Q, _ = torch.linalg.qr(W @ cross_cov.detach().double().cpu())
+    return mu.float(), (W_pinv @ Q @ Q.T @ W).float()
+
+
+def fit_leace_eraser(v_i: torch.Tensor, subspace: torch.Tensor) -> Eraser:
+    """Label-free eraser for the text subspace: cross-covariance of V_I with its
+    own subspace scores (V_I · b_k) is Σ Sᵀ."""
+    x = v_i.detach().double().cpu()
+    cross_cov = torch.cov((x - x.mean(0)).T) @ subspace.detach().double().cpu().T
+    return fit_leace(x, cross_cov)
+
+
+def leace_project(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:
+    mu, M = eraser
+    return v_i - (v_i - mu) @ M.T
+
+
+@torch.no_grad()
+def embed_dataset(
+    oracle: CLIPOracle, dataset: Dataset, batch_size: int = 256, num_workers: int = 4
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One ordered CLIP pass over a (image, label, concept) dataset whose images
+    are ImageNet-normalised (as in training).  Returns CPU tensors
+    v_i (N, D), labels (N,), concepts (N,), aligned with dataset indices."""
+    renorm = RenormalizeForCLIP().to(oracle.device)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+    )
+    v_i, labels, concepts = [], [], []
+    for images, y, c in loader:
+        v_i.append(oracle.encode_images(renorm(images.to(oracle.device))).float().cpu())
+        labels.append(y)
+        concepts.append(c)
+    return torch.cat(v_i), torch.cat(labels), torch.cat(concepts)
+
+
+@torch.no_grad()
+def zeroshot_concept_labels(
+    oracle: CLIPOracle, prompts_pos: List[str], prompts_neg: List[str], v_i: torch.Tensor
+) -> torch.Tensor:
+    """CLIP zero-shot concept prediction: 1 if V_I is closer to the mean positive
+    prompt embedding than to the mean negative one."""
+    d = oracle.encode_text(prompts_pos).mean(0) - oracle.encode_text(prompts_neg).mean(0)
+    return (v_i.to(d.device) @ d > 0).long().cpu()
+
+
 # ── Distillation target computation ──────────────────────────────────────────
 
 
@@ -215,6 +291,7 @@ def compute_distillation_targets(
     pixel_values: torch.Tensor,
     subspace: torch.Tensor,
     renormalize: bool = True,
+    eraser: Eraser | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Full pipeline for one batch:
@@ -229,6 +306,8 @@ def compute_distillation_targets(
     subspace     : (k, D) orthonormal concept subspace
                    (pass a (1, D) tensor to replicate the single-direction case)
     renormalize  : whether to L2-normalise V_I_perp before returning
+    eraser       : (mu, M) from fit_leace_eraser — if given, V_I_perp uses the
+                   whitened eraser instead of orthogonal projection of `subspace`
 
     Returns
     -------
@@ -236,7 +315,10 @@ def compute_distillation_targets(
     v_i_perp : (B, D)  concept-scrubbed embeddings    (backbone target)
     """
     v_i = oracle.encode_images(pixel_values)  # (B, D)
-    v_i_perp = orthogonal_project_subspace(v_i, subspace)  # (B, D)
+    if eraser is not None:
+        v_i_perp = leace_project(v_i, eraser)  # (B, D)
+    else:
+        v_i_perp = orthogonal_project_subspace(v_i, subspace)  # (B, D)
     if renormalize:
         v_i_perp = F.normalize(v_i_perp, dim=-1)
     return v_i, v_i_perp

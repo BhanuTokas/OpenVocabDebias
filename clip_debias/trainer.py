@@ -45,7 +45,7 @@ from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 
-from .clip_oracle import CLIPOracle, compute_distillation_targets
+from .clip_oracle import CLIPOracle, Eraser, compute_distillation_targets
 from .clip_preprocess import RenormalizeForCLIP
 from .evaluate import extract_features, train_linear_probe, worst_group_accuracy
 from .losses import BackboneLoss, ProjHeadLoss
@@ -104,6 +104,7 @@ class Trainer:
         cfg,
         oracle: CLIPOracle | None = None,
         subspace: torch.Tensor | None = None,
+        eraser: Eraser | None = None,
     ):
         self.model = model
         self.cfg = cfg
@@ -119,6 +120,15 @@ class Trainer:
 
         self.oracle = oracle
         self.subspace = subspace.to(self.device) if subspace is not None else None
+        # Whitened eraser (mu, M) for V_I_perp; None → orthogonal projection
+        self.eraser = (
+            tuple(t.to(self.device) for t in eraser) if eraser is not None else None
+        )
+        if not self._erm_mode and (cfg.eraser == "leace") != (self.eraser is not None):
+            raise ValueError(
+                f"cfg.eraser={cfg.eraser!r} but an eraser was "
+                f"{'not ' if self.eraser is None else ''}passed to Trainer"
+            )
         self.renorm = (
             RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
         )
@@ -234,7 +244,11 @@ class Trainer:
 
         clip_images = self.renorm(images)
         v_i, v_i_perp = compute_distillation_targets(
-            self.oracle, clip_images, self.subspace, renormalize=True
+            self.oracle,
+            clip_images,
+            self.subspace,
+            renormalize=True,
+            eraser=self.eraser,
         )
 
         with autocast(self._device_type, enabled=self.cfg.amp):
@@ -360,7 +374,11 @@ class Trainer:
             clip_images = self.renorm(images)
             with torch.no_grad():
                 v_i, v_i_perp = compute_distillation_targets(
-                    self.oracle, clip_images, self.subspace, renormalize=True
+                    self.oracle,
+                    clip_images,
+                    self.subspace,
+                    renormalize=True,
+                    eraser=self.eraser,
                 )
 
         with autocast(self._device_type, enabled=self.cfg.amp):
