@@ -144,7 +144,9 @@ class Trainer:
         self._target_eraser = self.eraser if cfg.eraser == "leace" else None
         self._whitened_repulse = cfg.repulse == "whitened"
         self.val_pseudo_concepts = (
-            val_pseudo_concepts.cpu().numpy() if val_pseudo_concepts is not None else None
+            val_pseudo_concepts.cpu().numpy()
+            if val_pseudo_concepts is not None
+            else None
         )
         self.renorm = (
             RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
@@ -624,11 +626,16 @@ class Trainer:
                 torch.save(self.model.state_dict(), best_wga)
                 print(f"    ✓ best val_wga={val_wga:.4f}  → {best_wga}")
 
-            if val_pseudo_wga is not None and val_pseudo_wga > self._best_val_pseudo_wga:
+            if (
+                val_pseudo_wga is not None
+                and val_pseudo_wga > self._best_val_pseudo_wga
+            ):
                 self._best_val_pseudo_wga = val_pseudo_wga
                 best_pseudo = os.path.join(self.ckpt_dir, "best_pseudo_wga.pt")
                 torch.save(self.model.state_dict(), best_pseudo)
-                print(f"    ✓ best val_pseudo_wga={val_pseudo_wga:.4f}  → {best_pseudo}")
+                print(
+                    f"    ✓ best val_pseudo_wga={val_pseudo_wga:.4f}  → {best_pseudo}"
+                )
 
         print()
         return os.path.join(self.ckpt_dir, "best_wga.pt")

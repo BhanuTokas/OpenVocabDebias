@@ -218,10 +218,13 @@ def orthogonal_project(
 # in V_I that linearly covaries with the text-subspace scores, using only the
 # unlabeled image covariance — still label-free.
 
+
 class Eraser(NamedTuple):
     mu: torch.Tensor  # (D,)   train-set mean of V_I
     M: torch.Tensor  # (D, D) erasure map:  x' = x − (x − μ) Mᵀ
-    R: torch.Tensor  # (r, D) whitened concept scores:  z = (x − μ) Rᵀ  (unit variance, decorrelated)
+    R: (
+        torch.Tensor
+    )  # (r, D) whitened concept scores:  z = (x − μ) Rᵀ  (unit variance, decorrelated)
 
     def to(self, device) -> "Eraser":
         return Eraser(*(t.to(device) for t in self))

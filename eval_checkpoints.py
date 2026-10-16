@@ -164,7 +164,9 @@ def concept_prompts(cfg: DebiasingConfig, dataset: str) -> Tuple[List[str], List
     return get_concept_prompts(cfg.concept_attr)
 
 
-def select_pseudo_best(run_dir: str, model, val_loader, val_pseudo: np.ndarray, cfg) -> bool:
+def select_pseudo_best(
+    run_dir: str, model, val_loader, val_pseudo: np.ndarray, cfg
+) -> bool:
     """Write run_dir/best_pseudo_wga.pt from the epoch checkpoint with the best
     pseudo-group val WGA (first one on ties, as in the trainer)."""
     epoch_ckpts = sorted(glob.glob(os.path.join(run_dir, "epoch_*.pt")))
@@ -183,7 +185,11 @@ def select_pseudo_best(run_dir: str, model, val_loader, val_pseudo: np.ndarray, 
     torch.save(best[2], os.path.join(run_dir, PSEUDO_CKPT))
     with open(os.path.join(run_dir, "best_pseudo_wga.json"), "w") as f:
         json.dump(
-            {"epoch": best[1], "val_pseudo_wga": best[0], "created_by": "eval_checkpoints.py"},
+            {
+                "epoch": best[1],
+                "val_pseudo_wga": best[0],
+                "created_by": "eval_checkpoints.py",
+            },
             f,
             indent=2,
         )
@@ -207,7 +213,10 @@ def print_summary(rows: List[dict]):
     print(f"{'='*100}")
     run_w = max([22] + [len(r) + 2 for r, _ in grouped])
     ckpt_w = max([13] + [len(c) + 2 for _, c in grouped])
-    print(f"  {'run':<{run_w}}{'ckpt':<{ckpt_w}}" + "".join(f"{k:<22}" for k in metric_keys))
+    print(
+        f"  {'run':<{run_w}}{'ckpt':<{ckpt_w}}"
+        + "".join(f"{k:<22}" for k in metric_keys)
+    )
     for (run_name, ckpt), group in sorted(grouped.items()):
         line = f"  {run_name:<{run_w}}{ckpt:<{ckpt_w}}"
         for k in metric_keys:
@@ -246,18 +255,29 @@ def main():
         train_loader, val_loader, test_loader = loader_cache[key]
 
         model = build_model(cfg, num_classes=2)
-        if args.pseudo_from_epochs and not os.path.isfile(os.path.join(run_dir, PSEUDO_CKPT)):
+        if args.pseudo_from_epochs and not os.path.isfile(
+            os.path.join(run_dir, PSEUDO_CKPT)
+        ):
             pos, neg = concept_prompts(cfg, dataset)
             pkey = key + (cfg.clip_model, tuple(pos), tuple(neg))
             if pkey not in pseudo_cache:
                 if oracle is None or oracle_name != cfg.clip_model:
                     print(f"\nLoading CLIP ({cfg.clip_model}) …")
-                    oracle, oracle_name = CLIPOracle(cfg.clip_model, device=cfg.device), cfg.clip_model
-                v_va, _, c_va = embed_dataset(oracle, val_loader.dataset, num_workers=args.num_workers)
+                    oracle, oracle_name = (
+                        CLIPOracle(cfg.clip_model, device=cfg.device),
+                        cfg.clip_model,
+                    )
+                v_va, _, c_va = embed_dataset(
+                    oracle, val_loader.dataset, num_workers=args.num_workers
+                )
                 c_hat = zeroshot_concept_labels(oracle, pos, neg, v_va)
-                print(f"  zero-shot concept accuracy on val: {(c_hat == c_va).float().mean():.4f}")
+                print(
+                    f"  zero-shot concept accuracy on val: {(c_hat == c_va).float().mean():.4f}"
+                )
                 pseudo_cache[pkey] = c_hat.numpy()
-            print(f"\n[{cfg.run_name}  seed={cfg.seed}] selecting {PSEUDO_CKPT} from epoch checkpoints")
+            print(
+                f"\n[{cfg.run_name}  seed={cfg.seed}] selecting {PSEUDO_CKPT} from epoch checkpoints"
+            )
             select_pseudo_best(run_dir, model, val_loader, pseudo_cache[pkey], cfg)
         for ckpt_name in args.ckpts:
             ckpt_path = os.path.join(run_dir, ckpt_name)

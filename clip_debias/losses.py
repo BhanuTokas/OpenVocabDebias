@@ -73,7 +73,9 @@ def repulsion_loss(
     return projections.pow(2).sum(dim=-1).mean()
 
 
-def decorrelation_loss(embed: torch.Tensor, scores: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def decorrelation_loss(
+    embed: torch.Tensor, scores: torch.Tensor, eps: float = 1e-6
+) -> torch.Tensor:
     """
     Squared batch correlation between every feature of E(x) and every concept score.
 
