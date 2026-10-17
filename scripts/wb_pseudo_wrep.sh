@@ -42,9 +42,11 @@ $RUN -c "import numpy, torch, sys; print(sys.executable); print('numpy', numpy._
 
 # ── 1. Label-free selection on the finished sweep ────────────────────────────
 OLD_CKPT=./checkpoints_waterbirds/leace_pgrw
+# Independent of part 2, so a failure here is reported but does not stop training
 if [ -d "$OLD_CKPT" ]; then
     $RUN eval_checkpoints.py "$OLD_CKPT" --pseudo_from_epochs --ckpts best_pseudo_wga.pt \
-        --out ./results_waterbirds/leace_pgrw/eval_summary_pseudo.csv
+        --out ./results_waterbirds/leace_pgrw/eval_summary_pseudo.csv \
+        || echo "[warn] label-free selection on $OLD_CKPT failed; continuing with part 2" >&2
 else
     echo "[skip] $OLD_CKPT not found; no label-free selection for the old sweep" >&2
 fi

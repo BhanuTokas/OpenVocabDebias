@@ -106,11 +106,17 @@ def parse_args():
     return parser.parse_args()
 
 
-def find_run_dirs(paths: List[str], ckpt_names: List[str]) -> List[str]:
+def find_run_dirs(
+    paths: List[str], ckpt_names: List[str], with_epochs: bool = False
+) -> List[str]:
+    """Dirs holding any of ckpt_names (or, with_epochs, any epoch_XX.pt — so runs
+    that best_pseudo_wga.pt is still to be created for are found too)."""
     run_dirs = set()
     for path in paths:
         for root, _dirs, files in os.walk(path):
-            if any(name in files for name in ckpt_names):
+            if any(name in files for name in ckpt_names) or (
+                with_epochs and any(re.fullmatch(r"epoch_\d+\.pt", f) for f in files)
+            ):
                 run_dirs.add(os.path.normpath(root))
     return sorted(run_dirs)
 
@@ -228,7 +234,7 @@ def print_summary(rows: List[dict]):
 
 def main():
     args = parse_args()
-    run_dirs = find_run_dirs(args.paths, args.ckpts)
+    run_dirs = find_run_dirs(args.paths, args.ckpts, with_epochs=args.pseudo_from_epochs)
     if not run_dirs:
         raise SystemExit(f"No run dirs containing {args.ckpts} under {args.paths}")
     print(f"Found {len(run_dirs)} run dir(s)")
