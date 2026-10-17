@@ -234,7 +234,9 @@ def print_summary(rows: List[dict]):
 
 def main():
     args = parse_args()
-    run_dirs = find_run_dirs(args.paths, args.ckpts, with_epochs=args.pseudo_from_epochs)
+    run_dirs = find_run_dirs(
+        args.paths, args.ckpts, with_epochs=args.pseudo_from_epochs
+    )
     if not run_dirs:
         raise SystemExit(f"No run dirs containing {args.ckpts} under {args.paths}")
     print(f"Found {len(run_dirs)} run dir(s)")
