@@ -102,6 +102,13 @@ def parse_args():
     parser.add_argument("--results_dir", default="./results")
     parser.add_argument("--no_amp", action="store_true")
     parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=4,
+        help="DataLoader workers; CelebA JPEG decoding is the bottleneck, so match "
+        "the allocated CPU cores",
+    )
+    parser.add_argument(
         "--target_attr",
         default="Attractive",
         help="CelebA attribute to classify (e.g. Attractive, Smiling, Blond_Hair)",
@@ -243,6 +250,7 @@ def main():
         lr=args.lr,
         checkpoint_dir=args.checkpoint_dir,
         amp=not args.no_amp,
+        num_workers=args.num_workers,
         device=device,
         target_attr=args.target_attr,
         concept_attr=args.concept_attr,
