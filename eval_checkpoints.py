@@ -166,7 +166,9 @@ def concept_prompts(cfg: DebiasingConfig, dataset: str) -> Tuple[List[str], List
         from waterbirds_train import PROMPT_SETS
 
         male_pos, _ = get_concept_prompts("Male")
-        if not cfg.concept_prompts_pos or list(cfg.concept_prompts_pos) == list(male_pos):
+        if not cfg.concept_prompts_pos or list(cfg.concept_prompts_pos) == list(
+            male_pos
+        ):
             return PROMPT_SETS["words"]
         return cfg.concept_prompts_pos, cfg.concept_prompts_neg
     if cfg.concept_prompts_pos and cfg.concept_prompts_neg:
