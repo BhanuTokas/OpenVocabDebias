@@ -159,12 +159,16 @@ def load_run_cfg(run_dir: str, args) -> Tuple[DebiasingConfig, str, str]:
 
 
 def concept_prompts(cfg: DebiasingConfig, dataset: str) -> Tuple[List[str], List[str]]:
-    """Prompts the run used for its concept (Waterbirds configs before Oct 2026
-    recorded the CelebA defaults, so Waterbirds always uses the script's words)."""
+    """Prompts the run used for its concept.  Waterbirds configs written before
+    Oct 2026 recorded the CelebA gender defaults instead; those runs used the
+    Waterbirds word prompts."""
     if dataset == "waterbirds":
-        from waterbirds_train import NEG_WORDS, POS_WORDS
+        from waterbirds_train import PROMPT_SETS
 
-        return POS_WORDS, NEG_WORDS
+        male_pos, _ = get_concept_prompts("Male")
+        if not cfg.concept_prompts_pos or list(cfg.concept_prompts_pos) == list(male_pos):
+            return PROMPT_SETS["words"]
+        return cfg.concept_prompts_pos, cfg.concept_prompts_neg
     if cfg.concept_prompts_pos and cfg.concept_prompts_neg:
         return cfg.concept_prompts_pos, cfg.concept_prompts_neg
     return get_concept_prompts(cfg.concept_attr)

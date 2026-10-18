@@ -91,6 +91,45 @@ NEG_WORDS = [
     "vegetation",
 ]
 
+# Waterbirds backgrounds come from Places: ocean / natural lake (water) and
+# bamboo forest / broadleaf forest (land).  Same length → per-pair differences.
+WATER_PLACES = [
+    "over the ocean",
+    "on a lake",
+    "at the beach",
+    "near the shore",
+    "on the water",
+    "by the sea",
+]
+LAND_PLACES = [
+    "in a bamboo forest",
+    "in a broadleaf forest",
+    "in the woods",
+    "on a tree branch",
+    "among green foliage",
+    "in a forest",
+]
+WB_TEMPLATES = [
+    "a photo of a bird {}",
+    "a bird {}",
+    "a photo of something {}",
+    "a picture taken {}",
+]
+
+# Concept prompt sets (pos = water, neg = land).  They define the concept
+# subspace, the whitened eraser and the CLIP zero-shot pseudo-labels.
+PROMPT_SETS = {
+    "words": (POS_WORDS, NEG_WORDS),
+    "sentences": (
+        [f"a photo of a bird {p}" for p in WATER_PLACES],
+        [f"a photo of a bird {p}" for p in LAND_PLACES],
+    ),
+    "ensemble": (
+        [t.format(p) for t in WB_TEMPLATES for p in WATER_PLACES],
+        [t.format(p) for t in WB_TEMPLATES for p in LAND_PLACES],
+    ),
+}
+
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -244,6 +283,13 @@ def parse_args():
         "labels from CLIP zero-shot prediction ('pseudo', label-free) or the "
         "dataset ('oracle', reference only). Adds a '_grw_<mode>' suffix.",
     )
+    parser.add_argument(
+        "--prompts",
+        default="words",
+        choices=list(PROMPT_SETS),
+        help="Concept prompt set for the subspace, eraser and pseudo-labels. "
+        "Anything but 'words' adds a '_p<set>' suffix to every run.",
+    )
     return parser.parse_args()
 
 
@@ -290,14 +336,16 @@ def main():
 
     # pos_words = get_synonyms("water")
     # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
-    print(f"  pos: {POS_WORDS}")
-    print(f"  neg: {NEG_WORDS}")
+    prompts_pos, prompts_neg = PROMPT_SETS[args.prompts]
+    print(f"  prompts: {args.prompts}")
+    print(f"  pos: {prompts_pos}")
+    print(f"  neg: {prompts_neg}")
 
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
     subspace = compute_concept_subspace(
         oracle,
-        prompts_pos=POS_WORDS,
-        prompts_neg=NEG_WORDS,
+        prompts_pos=prompts_pos,
+        prompts_neg=prompts_neg,
         k=args.concept_subspace_k,
     )
     print(f"  subspace shape: {tuple(subspace.shape)}")
@@ -307,7 +355,7 @@ def main():
     v_va, _, c_va = embed_dataset(
         oracle, val_loader.dataset, num_workers=ref_cfg.num_workers
     )
-    val_pseudo = zeroshot_concept_labels(oracle, POS_WORDS, NEG_WORDS, v_va)
+    val_pseudo = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_va)
     print(
         "  zero-shot concept accuracy on val (reported only, not used): "
         f"{(val_pseudo == c_va).float().mean():.4f}"
@@ -325,7 +373,7 @@ def main():
             eraser = fit_leace_eraser(v_tr, subspace)
             print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
         if args.group_reweight == "pseudo":
-            c_hat = zeroshot_concept_labels(oracle, POS_WORDS, NEG_WORDS, v_tr)
+            c_hat = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_tr)
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
@@ -361,7 +409,9 @@ def main():
                 sequential_phase_switch_epoch=args.sequential_switch_epoch,
             )
             cfg.concept_attr = "place"
-            cfg.concept_prompts_pos, cfg.concept_prompts_neg = POS_WORDS, NEG_WORDS
+            cfg.concept_prompts_pos, cfg.concept_prompts_neg = prompts_pos, prompts_neg
+            if args.prompts != "words":
+                cfg.run_name += f"_p{args.prompts}"
             if args.no_lambda_schedules:
                 cfg = disable_lambda_schedules(cfg)
             if args.scratch:

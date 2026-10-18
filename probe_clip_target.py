@@ -53,34 +53,9 @@ from clip_debias.clip_preprocess import RenormalizeForCLIP
 from clip_debias.config import DebiasingConfig, get_concept_prompts
 from clip_debias.data import CelebADebias, get_eval_transform
 from clip_debias.waterbirds_data import WaterbirdsDebiasDataset
-from waterbirds_train import NEG_WORDS, POS_WORDS
+from waterbirds_train import PROMPT_SETS
 
 SPLITS = ["train", "val", "test"]
-
-# Waterbirds backgrounds come from Places: ocean / natural lake (water) and
-# bamboo forest / broadleaf forest (land).  Same length → per-pair differences.
-WATER_PLACES = [
-    "over the ocean",
-    "on a lake",
-    "at the beach",
-    "near the shore",
-    "on the water",
-    "by the sea",
-]
-LAND_PLACES = [
-    "in a bamboo forest",
-    "in a broadleaf forest",
-    "in the woods",
-    "on a tree branch",
-    "among green foliage",
-    "in a forest",
-]
-WB_TEMPLATES = [
-    "a photo of a bird {}",
-    "a bird {}",
-    "a photo of something {}",
-    "a picture taken {}",
-]
 
 MALE_NOUNS = ["man", "male person", "boy", "gentleman", "guy", "father"]
 FEMALE_NOUNS = ["woman", "female person", "girl", "lady", "gal", "mother"]
@@ -95,15 +70,7 @@ FACE_TEMPLATES = [
 def prompt_sets(args) -> Dict[str, Tuple[List[str], List[str]]]:
     if args.dataset == "waterbirds":
         return {
-            "words": (POS_WORDS, NEG_WORDS),
-            "sentences": (
-                [f"a photo of a bird {p}" for p in WATER_PLACES],
-                [f"a photo of a bird {p}" for p in LAND_PLACES],
-            ),
-            "ensemble": (
-                [t.format(p) for t in WB_TEMPLATES for p in WATER_PLACES],
-                [t.format(p) for t in WB_TEMPLATES for p in LAND_PLACES],
-            ),
+            name: (list(pos), list(neg)) for name, (pos, neg) in PROMPT_SETS.items()
         }
     sets = {"library": get_concept_prompts(args.concept_attr)}
     if args.concept_attr == "Male":
