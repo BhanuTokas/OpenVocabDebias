@@ -290,6 +290,8 @@ class DebiasingConfig:
     # Group-balanced resampling of the train set over (target × concept) groups:
     #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
     #   | "oracle" (true concept labels — reference upper bound only)
+    #   | "propensity" (weights 1/p(y|z) on the whitened CLIP concept scores,
+    #     label-free, no groups — see reweight.propensity_weights)
     group_reweight: str = "none"
 
     # ── Concept prompts ───────────────────────────────────────────────────────
@@ -417,9 +419,13 @@ def use_whitened_repulse(
 
 
 def use_group_reweighting(cfg: DebiasingConfig, mode: str) -> DebiasingConfig:
-    """Train on group-balanced resampled batches; appends "_grw_<mode>"."""
-    if mode not in ("pseudo", "oracle"):
-        raise ValueError(f"group_reweight must be 'pseudo' or 'oracle', got {mode!r}")
+    """Train on reweighted batches (group-balanced for 'pseudo'/'oracle',
+    inverse propensity on CLIP concept scores for 'propensity'); appends
+    "_grw_<mode>"."""
+    if mode not in ("pseudo", "oracle", "propensity"):
+        raise ValueError(
+            f"group_reweight must be 'pseudo', 'oracle' or 'propensity', got {mode!r}"
+        )
     cfg.group_reweight = mode
     cfg.run_name += f"_grw_{mode}"
     return cfg

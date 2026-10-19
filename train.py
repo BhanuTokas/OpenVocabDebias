@@ -31,6 +31,7 @@ from clip_debias.clip_oracle import (
     compute_concept_subspace,
     embed_dataset,
     fit_leace_eraser,
+    whitened_concept_scores,
     zeroshot_concept_labels,
 )
 from clip_debias.config import (
@@ -51,7 +52,7 @@ from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
-from clip_debias.reweight import group_balanced_loader
+from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 
 RUN_FACTORIES = {
@@ -183,10 +184,12 @@ def parse_args():
     parser.add_argument(
         "--group_reweight",
         default="none",
-        choices=["none", "pseudo", "oracle"],
+        choices=["none", "pseudo", "oracle", "propensity"],
         help="Group-balanced resampling over (target x concept) groups, with concept "
         "labels from CLIP zero-shot prediction ('pseudo', label-free) or the "
-        "dataset ('oracle', reference only). Adds a '_grw_<mode>' suffix.",
+        "dataset ('oracle', reference only); 'propensity' weights by "
+        "1/p(y|z) on the whitened CLIP concept scores instead (label-free, no "
+        "groups). Adds a '_grw_<mode>' suffix.",
     )
     return parser.parse_args()
 
@@ -296,8 +299,12 @@ def main():
     )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
-    need_eraser = args.eraser == "leace" or args.repulse != "orth"
-    eraser = train_groups = None
+    need_eraser = (
+        args.eraser == "leace"
+        or args.repulse != "orth"
+        or args.group_reweight == "propensity"
+    )
+    eraser = train_weights = None
     if need_eraser or args.group_reweight != "none":
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
@@ -312,9 +319,12 @@ def main():
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
             )
-            train_groups = (y_tr, c_hat)
+            train_weights = group_weights(y_tr, c_hat)
         elif args.group_reweight == "oracle":
-            train_groups = (y_tr, c_tr)
+            train_weights = group_weights(y_tr, c_tr)
+        elif args.group_reweight == "propensity":
+            z_tr = whitened_concept_scores(v_tr, eraser)
+            train_weights = propensity_weights(y_tr, z_tr)
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -358,8 +368,8 @@ def main():
                 val_pseudo_concepts=val_pseudo,
             )
             fit_loader = (
-                group_balanced_loader(train_loader, *train_groups, seed=seed)
-                if train_groups is not None
+                weighted_loader(train_loader, train_weights, seed=seed)
+                if train_weights is not None
                 else train_loader
             )
             best_ckpt = trainer.fit(fit_loader, val_loader)
