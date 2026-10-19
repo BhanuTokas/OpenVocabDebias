@@ -22,12 +22,14 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 
 def group_weights(labels: torch.Tensor, concepts: torch.Tensor) -> torch.Tensor:
-    """Per-example weights drawing each (label, concept) group equally often."""
-    groups = labels.long() * 2 + concepts.long()
-    counts = torch.bincount(groups, minlength=4)
+    """Per-example weights drawing each (label, concept) group equally often.
+    Concepts may be joint codes over several attributes (any number of values)."""
+    n_c = max(2, int(concepts.max()) + 1)
+    groups = labels.long() * n_c + concepts.long()
+    counts = torch.bincount(groups, minlength=n_c * (int(labels.max()) + 1))
     print(
         "  group-balanced sampling — group sizes (y, c): "
-        + "  ".join(f"({g // 2},{g % 2})={int(n)}" for g, n in enumerate(counts))
+        + "  ".join(f"({g // n_c},{g % n_c})={int(n)}" for g, n in enumerate(counts))
     )
     return (1.0 / counts.clamp_min(1).double())[groups]
 

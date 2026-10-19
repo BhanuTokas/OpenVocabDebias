@@ -294,6 +294,10 @@ class DebiasingConfig:
     #     label-free, no groups — see reweight.propensity_weights)
     group_reweight: str = "none"
 
+    # Further spurious attributes (CelebA): the concept becomes the joint code
+    # concept_attr + 2*extra[0] + ..., with one text subspace per attribute.
+    extra_concept_attrs: List[str] = field(default_factory=list)
+
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
     # Override by passing concept_prompts_pos / concept_prompts_neg explicitly.

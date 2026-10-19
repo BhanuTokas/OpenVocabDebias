@@ -50,7 +50,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-from clip_debias.clip_oracle import CLIPOracle, embed_dataset, zeroshot_concept_labels
+from clip_debias.clip_oracle import CLIPOracle, embed_dataset, zeroshot_concept_codes
 from clip_debias.config import DebiasingConfig, get_concept_prompts
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import extract_features, run_evaluation, worst_group_accuracy
@@ -259,7 +259,13 @@ def main():
     for run_dir in run_dirs:
         cfg, dataset, source = load_run_cfg(run_dir, args)
 
-        key = (dataset, cfg.celeba_root, cfg.target_attr, cfg.concept_attr)
+        key = (
+            dataset,
+            cfg.celeba_root,
+            cfg.target_attr,
+            cfg.concept_attr,
+            tuple(cfg.extra_concept_attrs),
+        )
         if key not in loader_cache:
             print(f"\nBuilding {dataset} dataloaders …")
             if dataset == "waterbirds":
@@ -272,8 +278,10 @@ def main():
         if args.pseudo_from_epochs and not os.path.isfile(
             os.path.join(run_dir, PSEUDO_CKPT)
         ):
-            pos, neg = concept_prompts(cfg, dataset)
-            pkey = key + (cfg.clip_model, tuple(pos), tuple(neg))
+            pairs = [concept_prompts(cfg, dataset)] + [
+                get_concept_prompts(a) for a in cfg.extra_concept_attrs
+            ]
+            pkey = key + (cfg.clip_model, tuple(tuple(p) + tuple(n) for p, n in pairs))
             if pkey not in pseudo_cache:
                 if oracle is None or oracle_name != cfg.clip_model:
                     print(f"\nLoading CLIP ({cfg.clip_model}) …")
@@ -284,7 +292,7 @@ def main():
                 v_va, _, c_va = embed_dataset(
                     oracle, val_loader.dataset, num_workers=args.num_workers
                 )
-                c_hat = zeroshot_concept_labels(oracle, pos, neg, v_va)
+                c_hat = zeroshot_concept_codes(oracle, pairs, v_va)
                 print(
                     f"  zero-shot concept accuracy on val: {(c_hat == c_va).float().mean():.4f}"
                 )

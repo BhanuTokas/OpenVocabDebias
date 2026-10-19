@@ -144,6 +144,21 @@ def compute_concept_subspace(
     return subspace
 
 
+def compute_multi_concept_subspace(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    k: int = 3,
+) -> torch.Tensor:
+    """Concept subspace for several attributes: each attribute's top-k text
+    subspace (compute_concept_subspace), stacked and re-orthonormalised.
+    One attribute returns exactly compute_concept_subspace's result."""
+    parts = [compute_concept_subspace(oracle, pos, neg, k=k) for pos, neg in prompt_pairs]
+    if len(parts) == 1:
+        return parts[0]
+    q, _ = torch.linalg.qr(torch.cat(parts).T)  # (D, sum k) orthonormal columns
+    return q.T.contiguous()
+
+
 # ── Kept for backwards compatibility / Waterbirds use ────────────────────────
 
 
@@ -300,6 +315,20 @@ def zeroshot_concept_labels(
         0
     )
     return (v_i.to(d.device) @ d > 0).long().cpu()
+
+
+@torch.no_grad()
+def zeroshot_concept_codes(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    v_i: torch.Tensor,
+) -> torch.Tensor:
+    """Joint zero-shot concept code sum_j 2^j * c_j over several attributes
+    (attribute j = prompt_pairs[j]); one attribute gives the plain 0/1 label."""
+    code = torch.zeros(len(v_i), dtype=torch.long)
+    for j, (pos, neg) in enumerate(prompt_pairs):
+        code += zeroshot_concept_labels(oracle, pos, neg, v_i) << j
+    return code
 
 
 # ── Distillation target computation ──────────────────────────────────────────

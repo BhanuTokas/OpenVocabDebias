@@ -28,11 +28,11 @@ import torch
 
 from clip_debias.clip_oracle import (
     CLIPOracle,
-    compute_concept_subspace,
+    compute_multi_concept_subspace,
     embed_dataset,
     fit_leace_eraser,
     whitened_concept_scores,
-    zeroshot_concept_labels,
+    zeroshot_concept_codes,
 )
 from clip_debias.config import (
     erm_config,
@@ -118,6 +118,14 @@ def parse_args():
         "--concept_attr",
         default="Male",
         help="CelebA attribute to debias against (e.g. Male, Young, Eyeglasses)",
+    )
+    parser.add_argument(
+        "--extra_concept_attrs",
+        nargs="*",
+        default=[],
+        help="Further spurious CelebA attributes (e.g. Young).  The concept becomes "
+        "the joint code concept_attr + 2*extra[0] + ...; groups, pseudo-labels and "
+        "WGA are over all (target, code) cells, plus per-attribute WGA/probes.",
     )
     parser.add_argument(
         "--concept_prompts_pos",
@@ -245,6 +253,10 @@ def main():
         print(f"Auto-selected prompts for concept '{args.concept_attr}'")
     print(f"  pos: {prompts_pos}")
     print(f"  neg: {prompts_neg}")
+    prompt_pairs = [(prompts_pos, prompts_neg)]
+    for attr in args.extra_concept_attrs:
+        prompt_pairs.append(get_concept_prompts(attr))
+        print(f"  extra concept '{attr}': {len(prompt_pairs[-1][0])} prompt pairs")
 
     shared_overrides = dict(
         celeba_root=args.celeba_root,
@@ -258,6 +270,7 @@ def main():
         device=device,
         target_attr=args.target_attr,
         concept_attr=args.concept_attr,
+        extra_concept_attrs=list(args.extra_concept_attrs),
         concept_prompts_pos=prompts_pos,
         concept_prompts_neg=prompts_neg,
         concept_subspace_k=args.concept_subspace_k,
@@ -279,11 +292,8 @@ def main():
     print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
     oracle = CLIPOracle(ref_cfg.clip_model, device=device)
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
-    subspace = compute_concept_subspace(
-        oracle,
-        prompts_pos=prompts_pos,
-        prompts_neg=prompts_neg,
-        k=args.concept_subspace_k,
+    subspace = compute_multi_concept_subspace(
+        oracle, prompt_pairs, k=args.concept_subspace_k
     )
     print(f"  subspace shape: {tuple(subspace.shape)}")
 
@@ -292,7 +302,7 @@ def main():
     v_va, _, c_va = embed_dataset(
         oracle, val_loader.dataset, num_workers=ref_cfg.num_workers
     )
-    val_pseudo = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_va)
+    val_pseudo = zeroshot_concept_codes(oracle, prompt_pairs, v_va)
     print(
         "  zero-shot concept accuracy on val (reported only, not used): "
         f"{(val_pseudo == c_va).float().mean():.4f}"
@@ -314,7 +324,7 @@ def main():
             eraser = fit_leace_eraser(v_tr, subspace)
             print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
         if args.group_reweight == "pseudo":
-            c_hat = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_tr)
+            c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr)
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
@@ -389,7 +399,9 @@ def main():
                 "run_name": cfg.run_name,
                 "seed": seed,
                 "target_attr": args.target_attr,
-                "concept_attr": args.concept_attr,
+                "concept_attr": "+".join(
+                    [args.concept_attr, *args.extra_concept_attrs]
+                ),
                 "subspace_k": args.concept_subspace_k,
                 "run_dir": trainer.ckpt_dir,
                 **metrics,

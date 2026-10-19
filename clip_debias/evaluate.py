@@ -215,6 +215,23 @@ def run_evaluation(
         preds=test_feats["preds"],
     )
 
+    # ── 4. Per-attribute metrics when the concept is a joint code ─────────────
+    attr_metrics: Dict[str, float] = {}
+    n_bits = int(
+        max(train_feats["concepts"].max(), test_feats["concepts"].max())
+    ).bit_length()
+    if n_bits > 1:
+        for j in range(n_bits):
+            bit_tr = (train_feats["concepts"] >> j) & 1
+            bit_te = (test_feats["concepts"] >> j) & 1
+            print(f"  Fitting concept probe on E(x) for attribute {j} …")
+            p = train_linear_probe(
+                train_feats["embeds"], bit_tr, test_feats["embeds"], bit_te
+            )
+            _, w = worst_group_accuracy(test_feats["targets"], bit_te, test_feats["preds"])
+            attr_metrics[f"probe_attr{j}_test_acc"] = p["probe_test_acc"]
+            attr_metrics[f"wga_attr{j}"] = w
+
     # ── Assemble & print ──────────────────────────────────────────────────────
     metrics: Dict[str, float] = {
         **probe_metrics,
@@ -223,6 +240,7 @@ def run_evaluation(
         "task_test_acc": task_acc,
         "worst_group_acc": worst_acc,
         **{f"group_acc_{k}": v for k, v in group_accs.items()},
+        **attr_metrics,
     }
 
     print(f"\n  Results for '{label}':")
@@ -233,6 +251,11 @@ def run_evaluation(
     print(f"    Probe on P(E(x)) (test) : {proj_probe['probe_test_acc']:.4f}")
     print(f"    Overall task acc (test) : {task_acc:.4f}")
     print(f"    Worst-group acc (test)  : {worst_acc:.4f}")
+    for j in range(n_bits if n_bits > 1 else 0):
+        print(
+            f"    attribute {j}: probe {attr_metrics[f'probe_attr{j}_test_acc']:.4f}"
+            f"  WGA over (target, attribute) {attr_metrics[f'wga_attr{j}']:.4f}"
+        )
     print(f"    Per-group breakdown:")
     for (t, c), acc in sorted(group_accs.items()):
         print(
