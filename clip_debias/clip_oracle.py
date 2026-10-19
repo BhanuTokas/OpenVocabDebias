@@ -152,7 +152,9 @@ def compute_multi_concept_subspace(
     """Concept subspace for several attributes: each attribute's top-k text
     subspace (compute_concept_subspace), stacked and re-orthonormalised.
     One attribute returns exactly compute_concept_subspace's result."""
-    parts = [compute_concept_subspace(oracle, pos, neg, k=k) for pos, neg in prompt_pairs]
+    parts = [
+        compute_concept_subspace(oracle, pos, neg, k=k) for pos, neg in prompt_pairs
+    ]
     if len(parts) == 1:
         return parts[0]
     q, _ = torch.linalg.qr(torch.cat(parts).T)  # (D, sum k) orthonormal columns

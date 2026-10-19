@@ -228,7 +228,9 @@ def run_evaluation(
             p = train_linear_probe(
                 train_feats["embeds"], bit_tr, test_feats["embeds"], bit_te
             )
-            _, w = worst_group_accuracy(test_feats["targets"], bit_te, test_feats["preds"])
+            _, w = worst_group_accuracy(
+                test_feats["targets"], bit_te, test_feats["preds"]
+            )
             attr_metrics[f"probe_attr{j}_test_acc"] = p["probe_test_acc"]
             attr_metrics[f"wga_attr{j}"] = w
 
