@@ -167,10 +167,11 @@ def parse_args():
     parser.add_argument(
         "--repulse",
         default="orth",
-        choices=["orth", "whitened"],
+        choices=["orth", "whitened", "whitened_cond"],
         help="What L_repulse penalises: P(E(x)) along the text-subspace basis, or "
         "the batch correlation between E(x) and the whitened CLIP concept scores "
-        "(label-free). Runs with lambda_repulse > 0 get a '_wrep' suffix.",
+        "(label-free); 'whitened_cond' computes that correlation within each class. "
+        "Runs with lambda_repulse > 0 get a '_wrep' / '_wcrep' suffix.",
     )
     parser.add_argument(
         "--lambda_repulse",
@@ -295,7 +296,7 @@ def main():
     )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
-    need_eraser = args.eraser == "leace" or args.repulse == "whitened"
+    need_eraser = args.eraser == "leace" or args.repulse != "orth"
     eraser = train_groups = None
     if need_eraser or args.group_reweight != "none":
         print("\nEmbedding the train split with CLIP …")
@@ -336,8 +337,8 @@ def main():
                 cfg = use_scratch_backbone(cfg)
             if args.eraser == "leace":
                 cfg = use_leace_eraser(cfg)
-            if args.repulse == "whitened":
-                cfg = use_whitened_repulse(cfg)
+            if args.repulse != "orth":
+                cfg = use_whitened_repulse(cfg, args.repulse == "whitened_cond")
             if args.lambda_repulse is not None and cfg.lambda_repulse > 0:
                 cfg.lambda_repulse = args.lambda_repulse
                 cfg.run_name += f"_lrep{args.lambda_repulse:g}"

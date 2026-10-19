@@ -24,6 +24,11 @@ L_repulse  (repulse="whitened"):
              Zero cross-covariance between E(x) and z means no linear probe on
              E(x) predicts z better than a constant — the LEACE condition,
              imposed on the backbone features instead of the target.
+L_repulse  (repulse="whitened_cond"):
+             the same, but E(x) and z are centred within each class first, so
+             it penalises corr(E(x), z | y).  Under a spurious correlation the
+             concept and the label are confounded; the marginal version then
+             also removes label information, the conditional one does not.
 """
 
 from __future__ import annotations
@@ -74,7 +79,10 @@ def repulsion_loss(
 
 
 def decorrelation_loss(
-    embed: torch.Tensor, scores: torch.Tensor, eps: float = 1e-6
+    embed: torch.Tensor,
+    scores: torch.Tensor,
+    labels: torch.Tensor | None = None,
+    eps: float = 1e-6,
 ) -> torch.Tensor:
     """
     Squared batch correlation between every feature of E(x) and every concept score.
@@ -85,15 +93,24 @@ def decorrelation_loss(
     ----------
     embed  : (B, d) backbone features E(x)
     scores : (B, r) whitened CLIP concept scores (no gradient)
+    labels : (B,) class labels.  If given, embed and scores are centred within
+             each class, giving the partial correlation corr(embed_j, scores_k | y)
+             pooled over classes.
 
     Under independence each corr^2 is ~1/B, so the floor is about r/B.
     """
     with torch.autocast(embed.device.type, enabled=False):
         e = embed.float()
         z = scores.float()
-        e = (e - e.mean(0)) / (e.std(0) + eps)
-        z = (z - z.mean(0)) / (z.std(0) + eps)
-        corr = e.T @ z / (e.shape[0] - 1)  # (d, r)
+        if labels is None:
+            e = e - e.mean(0)
+            z = z - z.mean(0)
+        else:
+            onehot = F.one_hot(labels.long()).float()  # (B, C)
+            counts = onehot.sum(0).clamp_min(1.0)[:, None]  # (C, 1)
+            e = e - onehot @ (onehot.T @ e / counts)
+            z = z - onehot @ (onehot.T @ z / counts)
+        corr = (e.T @ z) / (e.norm(dim=0)[:, None] * z.norm(dim=0)[None, :] + eps)
         return corr.pow(2).mean(0).sum()
 
 
@@ -128,7 +145,8 @@ class BackboneLoss(nn.Module):
         self.lambda_task = cfg.lambda_task
         self.lambda_align = cfg.lambda_align
         self.lambda_repulse = cfg.lambda_repulse
-        self.whitened_repulse = cfg.repulse == "whitened"
+        self.whitened_repulse = cfg.repulse in ("whitened", "whitened_cond")
+        self.conditional_repulse = cfg.repulse == "whitened_cond"
 
     def forward(
         self,
@@ -160,7 +178,9 @@ class BackboneLoss(nn.Module):
         elif self.whitened_repulse:
             if embed is None or concept_scores is None:
                 raise ValueError("repulse='whitened' needs embed and concept_scores")
-            l_repulse = decorrelation_loss(embed, concept_scores)
+            l_repulse = decorrelation_loss(
+                embed, concept_scores, labels if self.conditional_repulse else None
+            )
         elif _subspace is not None:
             l_repulse = repulsion_loss(proj, _subspace)
         else:

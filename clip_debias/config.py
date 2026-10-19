@@ -283,6 +283,8 @@ class DebiasingConfig:
     #   "whitened" — squared batch correlation between E(x) and the whitened CLIP
     #                concept scores of the same images (needs the fitted eraser;
     #                see losses.decorrelation_loss)
+    #   "whitened_cond" — the same correlation computed within each class
+    #                (partial correlation given the label)
     repulse: str = "orth"
 
     # Group-balanced resampling of the train set over (target × concept) groups:
@@ -399,14 +401,18 @@ def use_leace_eraser(cfg: DebiasingConfig) -> DebiasingConfig:
     return cfg
 
 
-def use_whitened_repulse(cfg: DebiasingConfig) -> DebiasingConfig:
-    """Replace L_repulse with the E(x)–concept-score decorrelation loss.
+def use_whitened_repulse(
+    cfg: DebiasingConfig, conditional: bool = False
+) -> DebiasingConfig:
+    """Replace L_repulse with the E(x)–concept-score decorrelation loss
+    (class-conditional if `conditional`).
 
-    Only affects runs with lambda_repulse > 0; those get a "_wrep" suffix.
+    Only affects runs with lambda_repulse > 0; those get a "_wrep" suffix, or
+    "_wcrep" for the conditional version.
     """
     if cfg.lambda_repulse > 0:
-        cfg.repulse = "whitened"
-        cfg.run_name += "_wrep"
+        cfg.repulse = "whitened_cond" if conditional else "whitened"
+        cfg.run_name += "_wcrep" if conditional else "_wrep"
     return cfg
 
 
