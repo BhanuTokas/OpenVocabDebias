@@ -60,7 +60,9 @@ def propensity_weights(
     y = labels.long().numpy()
     z = scores.double().numpy()
     model = LogisticRegression(max_iter=2000).fit(z, y)
-    p_y_given_z = model.predict_proba(z)[np.arange(len(y)), np.searchsorted(model.classes_, y)]
+    p_y_given_z = model.predict_proba(z)[
+        np.arange(len(y)), np.searchsorted(model.classes_, y)
+    ]
     w = 1.0 / np.clip(p_y_given_z, 1e-6, None)
     if not class_balanced:
         w *= np.bincount(y)[y] / len(y)
