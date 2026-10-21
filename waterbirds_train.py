@@ -288,6 +288,14 @@ def parse_args():
         "groups). Adds a '_grw_<mode>' suffix.",
     )
     parser.add_argument(
+        "--clip_model",
+        default=DebiasingConfig.clip_model,
+        help="Frozen image-text encoder: a Hugging Face CLIP/SigLIP id (e.g. "
+        "google/siglip-base-patch16-224) or an OpenCLIP hf-hub:<repo> id (e.g. "
+        "hf-hub:timm/PE-Core-B-16).  A non-default encoder adds an "
+        "'_enc-<name>' suffix to every run.",
+    )
+    parser.add_argument(
         "--prompts",
         default="words",
         choices=list(PROMPT_SETS),
@@ -319,6 +327,7 @@ def main():
         amp=not args.no_amp,
         device=device,
         concept_subspace_k=args.concept_subspace_k,
+        clip_model=args.clip_model,
     )
 
     print("\nBuilding dataloaders …")
@@ -337,6 +346,7 @@ def main():
     # CLIP is always loaded: val pseudo-labels drive best_pseudo_wga.pt for every run
     print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
     oracle = CLIPOracle(ref_cfg.clip_model, device=device)
+    print(f"  embed dim {oracle.embed_dim}, input {oracle.image_size}px")
 
     # pos_words = get_synonyms("water")
     # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
@@ -418,11 +428,16 @@ def main():
                 seed=seed,
                 concept_subspace_k=args.concept_subspace_k,
                 sequential_phase_switch_epoch=args.sequential_switch_epoch,
+                clip_model=args.clip_model,
+                clip_embed_dim=oracle.embed_dim,
+                proj_out_dim=oracle.embed_dim,
             )
             cfg.concept_attr = "place"
             cfg.concept_prompts_pos, cfg.concept_prompts_neg = prompts_pos, prompts_neg
             if args.prompts != "words":
                 cfg.run_name += f"_p{args.prompts}"
+            if args.clip_model != DebiasingConfig.clip_model:
+                cfg.run_name += "_enc-" + args.clip_model.split("/")[-1]
             if args.no_lambda_schedules:
                 cfg = disable_lambda_schedules(cfg)
             if args.scratch:

@@ -49,7 +49,6 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Subset
 
 from clip_debias.clip_oracle import CLIPOracle, compute_concept_subspace, fit_leace
-from clip_debias.clip_preprocess import RenormalizeForCLIP
 from clip_debias.config import DebiasingConfig, get_concept_prompts
 from clip_debias.data import CelebADebias, get_eval_transform
 from clip_debias.waterbirds_data import WaterbirdsDebiasDataset
@@ -149,7 +148,7 @@ def encode_splits(oracle: CLIPOracle, args) -> Dict[str, Dict[str, np.ndarray]]:
         z = np.load(cache)
         return {s: {k: z[f"{s}_{k}"] for k in ("v_i", "y", "c")} for s in SPLITS}
 
-    renorm = RenormalizeForCLIP().to(oracle.device)
+    renorm = oracle.preprocess
     data, flat = {}, {}
     for split in SPLITS:
         loader = DataLoader(

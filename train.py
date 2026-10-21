@@ -35,6 +35,7 @@ from clip_debias.clip_oracle import (
     zeroshot_concept_codes,
 )
 from clip_debias.config import (
+    DebiasingConfig,
     erm_config,
     align_only_config,
     repulse_only_config,
@@ -118,6 +119,14 @@ def parse_args():
         "--concept_attr",
         default="Male",
         help="CelebA attribute to debias against (e.g. Male, Young, Eyeglasses)",
+    )
+    parser.add_argument(
+        "--clip_model",
+        default=DebiasingConfig.clip_model,
+        help="Frozen image-text encoder: a Hugging Face CLIP/SigLIP id (e.g. "
+        "google/siglip-base-patch16-224) or an OpenCLIP hf-hub:<repo> id (e.g. "
+        "hf-hub:timm/PE-Core-B-16).  A non-default encoder adds an "
+        "'_enc-<name>' suffix to every run.",
     )
     parser.add_argument(
         "--extra_concept_attrs",
@@ -271,6 +280,7 @@ def main():
         target_attr=args.target_attr,
         concept_attr=args.concept_attr,
         extra_concept_attrs=list(args.extra_concept_attrs),
+        clip_model=args.clip_model,
         concept_prompts_pos=prompts_pos,
         concept_prompts_neg=prompts_neg,
         concept_subspace_k=args.concept_subspace_k,
@@ -291,6 +301,8 @@ def main():
     # CLIP is always loaded: val pseudo-labels drive best_pseudo_wga.pt for every run
     print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
     oracle = CLIPOracle(ref_cfg.clip_model, device=device)
+    print(f"  embed dim {oracle.embed_dim}, input {oracle.image_size}px")
+    shared_overrides.update(clip_embed_dim=oracle.embed_dim, proj_out_dim=oracle.embed_dim)
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
     subspace = compute_multi_concept_subspace(
         oracle, prompt_pairs, k=args.concept_subspace_k
@@ -351,6 +363,8 @@ def main():
             set_seed(seed)
 
             cfg = RUN_FACTORIES[run_name](**shared_overrides, seed=seed)
+            if args.clip_model != DebiasingConfig.clip_model:
+                cfg.run_name += "_enc-" + args.clip_model.split("/")[-1]
             if args.no_lambda_schedules:
                 cfg = disable_lambda_schedules(cfg)
             if args.scratch:

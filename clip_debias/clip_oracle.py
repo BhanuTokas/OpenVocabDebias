@@ -34,7 +34,7 @@ from typing import List, NamedTuple, Tuple
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoModel, AutoProcessor
 
 from .clip_preprocess import RenormalizeForCLIP
 
@@ -42,21 +42,65 @@ from .clip_preprocess import RenormalizeForCLIP
 
 
 class CLIPOracle:
-    """Thin wrapper around a frozen HuggingFace CLIP model."""
+    """Thin wrapper around a frozen image-text dual encoder: any Hugging Face
+    `transformers` CLIP/SigLIP checkpoint, or an OpenCLIP model given as
+    "hf-hub:<repo>" (e.g. hf-hub:timm/PE-Core-L-14-336 for Perception Encoder).
+    `preprocess` maps the training pipeline's ImageNet-normalised 224px batches
+    to the encoder's input; `embed_dim` is the joint embedding size."""
 
     def __init__(self, model_name: str, device: str = "cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.model = CLIPModel.from_pretrained(model_name).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
+        if model_name.startswith("hf-hub:"):
+            self._init_open_clip(model_name)
+            return
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
+        self.processor = AutoProcessor.from_pretrained(model_name)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
+        self.model_type = self.model.config.model_type
+        ip = self.processor.image_processor
+        size = getattr(ip, "crop_size", None) or ip.size
+        self.image_size = size.get("height") or size.get("shortest_edge")
+        self.preprocess = RenormalizeForCLIP(
+            ip.image_mean, ip.image_std, self.image_size
+        ).to(self.device)
+        self.embed_dim = self.encode_text(["a photo"]).shape[-1]
+
+    def _init_open_clip(self, model_name: str):
+        import open_clip  # optional backend, only needed for hf-hub: models
+
+        self.model, _ = open_clip.create_model_from_pretrained(model_name)
+        self.model = self.model.to(self.device).eval()
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+        self.model_type = "open_clip"
+        size = self.model.visual.image_size
+        self.image_size = size[0] if isinstance(size, (tuple, list)) else size
+        self.preprocess = RenormalizeForCLIP(
+            self.model.visual.image_mean, self.model.visual.image_std, self.image_size
+        ).to(self.device)
+        self.embed_dim = self.encode_text(["a photo"]).shape[-1]
 
     @torch.no_grad()
     def encode_text(self, texts: List[str]) -> torch.Tensor:
         """(N, D) unit-normalised text embeddings."""
+        if self.model_type == "open_clip":
+            feats = self.model.encode_text(self.tokenizer(texts).to(self.device))
+            return F.normalize(feats.float(), dim=-1)
+        # SigLIP was trained on text padded to its full length (64 tokens for
+        # most checkpoints, 16 for so400m-patch14-224)
+        pad = (
+            dict(
+                padding="max_length",
+                max_length=self.model.config.text_config.max_position_embeddings,
+            )
+            if self.model_type.startswith("siglip")
+            else dict(padding=True)
+        )
         inputs = self.processor(
-            text=texts, return_tensors="pt", padding=True, truncation=True
+            text=texts, return_tensors="pt", truncation=True, **pad
         ).to(self.device)
         out = self.model.get_text_features(**inputs)
         feats = out.pooler_output if hasattr(out, "pooler_output") else out
@@ -65,6 +109,8 @@ class CLIPOracle:
     @torch.no_grad()
     def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """(B, D) unit-normalised image embeddings from CLIP-preprocessed pixels."""
+        if self.model_type == "open_clip":
+            return F.normalize(self.model.encode_image(pixel_values).float(), dim=-1)
         out = self.model.get_image_features(pixel_values=pixel_values)
         feats = out.pooler_output if hasattr(out, "pooler_output") else out
         return F.normalize(feats, dim=-1)
@@ -292,7 +338,7 @@ def embed_dataset(
     """One ordered CLIP pass over a (image, label, concept) dataset whose images
     are ImageNet-normalised (as in training).  Returns CPU tensors
     v_i (N, D), labels (N,), concepts (N,), aligned with dataset indices."""
-    renorm = RenormalizeForCLIP().to(oracle.device)
+    renorm = oracle.preprocess
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
     )

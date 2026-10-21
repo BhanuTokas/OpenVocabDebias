@@ -51,7 +51,6 @@ from .clip_oracle import (
     compute_distillation_targets,
     whitened_concept_scores,
 )
-from .clip_preprocess import RenormalizeForCLIP
 from .evaluate import extract_features, train_linear_probe, worst_group_accuracy
 from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
@@ -151,9 +150,7 @@ class Trainer:
             if val_pseudo_concepts is not None
             else None
         )
-        self.renorm = (
-            RenormalizeForCLIP().to(self.device) if not self._erm_mode else None
-        )
+        self.renorm = oracle.preprocess if not self._erm_mode else None
 
         self.backbone_criterion = BackboneLoss(cfg)
         self.proj_criterion = ProjHeadLoss()
