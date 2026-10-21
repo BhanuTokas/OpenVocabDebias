@@ -302,7 +302,9 @@ def main():
     print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
     oracle = CLIPOracle(ref_cfg.clip_model, device=device)
     print(f"  embed dim {oracle.embed_dim}, input {oracle.image_size}px")
-    shared_overrides.update(clip_embed_dim=oracle.embed_dim, proj_out_dim=oracle.embed_dim)
+    shared_overrides.update(
+        clip_embed_dim=oracle.embed_dim, proj_out_dim=oracle.embed_dim
+    )
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
     subspace = compute_multi_concept_subspace(
         oracle, prompt_pairs, k=args.concept_subspace_k

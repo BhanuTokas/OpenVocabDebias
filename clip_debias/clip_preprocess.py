@@ -30,7 +30,9 @@ class RenormalizeForCLIP(nn.Module):
 
     def __init__(self, mean=None, std=None, size: int | None = None):
         super().__init__()
-        mean = _CLIP_MEAN if mean is None else torch.as_tensor(mean, dtype=torch.float32)
+        mean = (
+            _CLIP_MEAN if mean is None else torch.as_tensor(mean, dtype=torch.float32)
+        )
         std = _CLIP_STD if std is None else torch.as_tensor(std, dtype=torch.float32)
         self.size = size
         # shape: (1, 3, 1, 1) for broadcast over (B, C, H, W)

@@ -64,7 +64,12 @@ def parse_args():
     p.add_argument("--skip_celeba", action="store_true")
     p.add_argument("--celeba_n_train", type=int, default=20000)
     p.add_argument("--celeba_n_val", type=int, default=10000)
-    p.add_argument("--k", type=int, default=9, help="text directions per concept (capped by prompt pairs)")
+    p.add_argument(
+        "--k",
+        type=int,
+        default=9,
+        help="text directions per concept (capped by prompt pairs)",
+    )
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--out_dir", default="./results/encoder_sweep")
@@ -74,12 +79,19 @@ def parse_args():
 @torch.no_grad()
 def embed(oracle, dataset, n, args, seed=0):
     """CLIP embeddings and (label, concept) for a fixed random subset."""
-    idx = torch.randperm(len(dataset), generator=torch.Generator().manual_seed(seed))[:n]
-    loader = DataLoader(Subset(dataset, idx.tolist()), batch_size=args.batch_size,
-                        num_workers=args.num_workers)
+    idx = torch.randperm(len(dataset), generator=torch.Generator().manual_seed(seed))[
+        :n
+    ]
+    loader = DataLoader(
+        Subset(dataset, idx.tolist()),
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
     V, Y, C = [], [], []
     for x, y, c in loader:
-        V.append(oracle.encode_images(oracle.preprocess(x.to(oracle.device))).float().cpu())
+        V.append(
+            oracle.encode_images(oracle.preprocess(x.to(oracle.device))).float().cpu()
+        )
         Y.append(y)
         C.append(c)
     return torch.cat(V), torch.cat(Y), torch.cat(C)
@@ -112,9 +124,15 @@ def main():
     if not args.skip_celeba:
         if args.celeba_root is None:
             raise SystemExit("--celeba_root is required unless --skip_celeba")
-        cb = build_dataloaders(erm_config(celeba_root=args.celeba_root, target_attr="Blond_Hair",
-                                          concept_attr="Male", extra_concept_attrs=["Young"],
-                                          num_workers=0))
+        cb = build_dataloaders(
+            erm_config(
+                celeba_root=args.celeba_root,
+                target_attr="Blond_Hair",
+                concept_attr="Male",
+                extra_concept_attrs=["Young"],
+                num_workers=0,
+            )
+        )
     rows = []
     for name in args.encoders:
         print(f"\n=== {name} ===", flush=True)
@@ -125,37 +143,76 @@ def main():
             print(f"  [skip] could not load: {type(e).__name__}: {e}")
             continue
         tag = re.sub(r"[^\w.-]", "_", name)
-        base = dict(encoder=name, embed_dim=oracle.embed_dim, input_px=oracle.image_size)
+        base = dict(
+            encoder=name, embed_dim=oracle.embed_dim, input_px=oracle.image_size
+        )
 
-        tr = cached(os.path.join(args.out_dir, f"{tag}_wb_train.npz"),
-                    lambda: embed(oracle, wb[0].dataset, len(wb[0].dataset), args))
-        va = cached(os.path.join(args.out_dir, f"{tag}_wb_val.npz"),
-                    lambda: embed(oracle, wb[1].dataset, len(wb[1].dataset), args))
+        tr = cached(
+            os.path.join(args.out_dir, f"{tag}_wb_train.npz"),
+            lambda: embed(oracle, wb[0].dataset, len(wb[0].dataset), args),
+        )
+        va = cached(
+            os.path.join(args.out_dir, f"{tag}_wb_val.npz"),
+            lambda: embed(oracle, wb[1].dataset, len(wb[1].dataset), args),
+        )
         for pset in ("words", "sentences"):
-            acc, corr, _ = concept_metrics(oracle, *PROMPT_SETS[pset], 3, tr[0], va[0], va[2])
-            rows.append(dict(base, dataset="waterbirds", concept="place", prompts=pset,
-                             zs_acc=acc, corr_z0=corr))
+            acc, corr, _ = concept_metrics(
+                oracle, *PROMPT_SETS[pset], 3, tr[0], va[0], va[2]
+            )
+            rows.append(
+                dict(
+                    base,
+                    dataset="waterbirds",
+                    concept="place",
+                    prompts=pset,
+                    zs_acc=acc,
+                    corr_z0=corr,
+                )
+            )
 
         if cb is not None:
-            tr = cached(os.path.join(args.out_dir, f"{tag}_celeba_train.npz"),
-                        lambda: embed(oracle, cb[0].dataset, args.celeba_n_train, args))
-            va = cached(os.path.join(args.out_dir, f"{tag}_celeba_val.npz"),
-                        lambda: embed(oracle, cb[1].dataset, args.celeba_n_val, args))
+            tr = cached(
+                os.path.join(args.out_dir, f"{tag}_celeba_train.npz"),
+                lambda: embed(oracle, cb[0].dataset, args.celeba_n_train, args),
+            )
+            va = cached(
+                os.path.join(args.out_dir, f"{tag}_celeba_val.npz"),
+                lambda: embed(oracle, cb[1].dataset, args.celeba_n_val, args),
+            )
             joint = torch.zeros_like(va[2])
             for bit, attr in enumerate(("Male", "Young")):
                 c_bit = (va[2] >> bit) & 1
-                acc, corr, zs = concept_metrics(oracle, *get_concept_prompts(attr), args.k,
-                                                tr[0], va[0], c_bit)
+                acc, corr, zs = concept_metrics(
+                    oracle, *get_concept_prompts(attr), args.k, tr[0], va[0], c_bit
+                )
                 joint += zs << bit
-                rows.append(dict(base, dataset="celeba", concept=attr, prompts="library",
-                                 zs_acc=acc, corr_z0=corr))
-            rows.append(dict(base, dataset="celeba", concept="Male+Young", prompts="library",
-                             zs_acc=float((joint == va[2]).float().mean()), corr_z0=""))
+                rows.append(
+                    dict(
+                        base,
+                        dataset="celeba",
+                        concept=attr,
+                        prompts="library",
+                        zs_acc=acc,
+                        corr_z0=corr,
+                    )
+                )
+            rows.append(
+                dict(
+                    base,
+                    dataset="celeba",
+                    concept="Male+Young",
+                    prompts="library",
+                    zs_acc=float((joint == va[2]).float().mean()),
+                    corr_z0="",
+                )
+            )
         print(f"  done in {time.time() - t0:.0f}s")
         for r in rows[-5:]:
             if r["encoder"] == name:
-                print(f"  {r['dataset']:10s} {r['concept']:10s} {r['prompts']:9s} "
-                      f"zs_acc {r['zs_acc']:.3f}  corr_z0 {r['corr_z0'] if r['corr_z0'] == '' else round(r['corr_z0'], 3)}")
+                print(
+                    f"  {r['dataset']:10s} {r['concept']:10s} {r['prompts']:9s} "
+                    f"zs_acc {r['zs_acc']:.3f}  corr_z0 {r['corr_z0'] if r['corr_z0'] == '' else round(r['corr_z0'], 3)}"
+                )
         del oracle
         torch.cuda.empty_cache()
 
@@ -164,11 +221,18 @@ def main():
         w.writeheader()
         w.writerows(rows)
     print(f"\nWritten {out_csv}")
-    print(f"\n{'encoder':<42}" + "".join(f"{h:<14}" for h in
-          ["WB words", "WB sent.", "Male", "Young", "Male+Young"]) + "  (zero-shot acc / |corr z0|)")
+    print(
+        f"\n{'encoder':<42}"
+        + "".join(
+            f"{h:<14}" for h in ["WB words", "WB sent.", "Male", "Young", "Male+Young"]
+        )
+        + "  (zero-shot acc / |corr z0|)"
+    )
     for name in dict.fromkeys(r["encoder"] for r in rows):
         rs = [r for r in rows if r["encoder"] == name]
-        cell = lambda r: f"{r['zs_acc']:.3f}" + (f"/{r['corr_z0']:.2f}" if r["corr_z0"] != "" else "")
+        cell = lambda r: f"{r['zs_acc']:.3f}" + (
+            f"/{r['corr_z0']:.2f}" if r["corr_z0"] != "" else ""
+        )
         print(f"{name:<42}" + "".join(f"{cell(r):<14}" for r in rs))
 
 
