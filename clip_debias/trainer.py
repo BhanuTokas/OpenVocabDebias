@@ -134,10 +134,15 @@ class Trainer:
         # Whitened eraser: V_I_perp (cfg.eraser="leace") and/or the concept
         # scores for the decorrelation repulse (cfg.repulse="whitened")
         self.eraser = eraser.to(self.device) if eraser is not None else None
-        needs_eraser = cfg.eraser == "leace" or cfg.align == "cka" or cfg.repulse in (
-            "whitened",
-            "whitened_cond",
-            "raw",  # only the mean μ
+        needs_eraser = (
+            cfg.eraser == "leace"
+            or cfg.align == "cka"
+            or cfg.repulse
+            in (
+                "whitened",
+                "whitened_cond",
+                "raw",  # only the mean μ
+            )
         )
         if not self._erm_mode and needs_eraser and self.eraser is None:
             raise ValueError(
