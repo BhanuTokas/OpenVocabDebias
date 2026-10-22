@@ -194,6 +194,29 @@ def parse_args():
         "Runs with lambda_repulse > 0 get a '_wrep' / '_wcrep' / '_rrep' suffix.",
     )
     parser.add_argument(
+        "--align",
+        default="proj",
+        choices=["proj", "cka"],
+        help="What L_align does: cosine of the projection head to V_I_perp, or "
+        "1 - linear CKA between E(x) and the LEACE-erased CLIP embedding (no head). "
+        "'cka' adds an '_acka' suffix to runs with lambda_align > 0.",
+    )
+    parser.add_argument(
+        "--lambda_align",
+        type=float,
+        default=None,
+        help="Override lambda_align for runs that have an align term "
+        "(adds a '_lal<value>' suffix). Default: each run config's own value.",
+    )
+    parser.add_argument(
+        "--eraser_fit",
+        default="biased",
+        choices=["biased", "balanced"],
+        help="Fit the whitened eraser / concept scores on the train set as is, or "
+        "reweighted to balance the (target x CLIP zero-shot concept) pseudo-groups "
+        "(label-free). 'balanced' adds an '_efbal' suffix.",
+    )
+    parser.add_argument(
         "--zs_cutoff",
         default="zero",
         choices=["zero", "gmm"],
@@ -331,6 +354,7 @@ def main():
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
     need_eraser = (
         args.eraser == "leace"
+        or args.align == "cka"
         or args.repulse != "orth"
         or args.group_reweight == "propensity"
     )
@@ -344,8 +368,15 @@ def main():
             cutoffs = fit_zeroshot_cutoffs(oracle, prompt_pairs, v_tr)
             print(f"  fitted zero-shot cutoffs (unlabeled train): {cutoffs}")
         if need_eraser:
-            eraser = fit_leace_eraser(v_tr, subspace)
-            print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
+            fit_w = None
+            if args.eraser_fit == "balanced":
+                c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
+                fit_w = group_weights(y_tr, c_fit)
+            eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
+            print(
+                f"  fitted whitened eraser on {len(v_tr):,} train embeddings "
+                f"({args.eraser_fit})"
+            )
         if args.group_reweight == "pseudo":
             c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
             print(
@@ -390,6 +421,15 @@ def main():
                 cfg = use_leace_eraser(cfg)
             if args.repulse != "orth":
                 cfg = use_whitened_repulse(cfg, args.repulse)
+            if args.align == "cka" and cfg.lambda_align > 0:
+                cfg.align = "cka"
+                cfg.run_name += "_acka"
+            if args.lambda_align is not None and cfg.lambda_align > 0:
+                cfg.lambda_align = args.lambda_align
+                cfg.run_name += f"_lal{args.lambda_align:g}"
+            if args.eraser_fit != "biased":
+                cfg.eraser_fit = args.eraser_fit
+                cfg.run_name += "_efbal"
             if args.zs_cutoff != "zero":
                 cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
                 cfg.run_name += f"_zs{args.zs_cutoff}"

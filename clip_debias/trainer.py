@@ -134,7 +134,7 @@ class Trainer:
         # Whitened eraser: V_I_perp (cfg.eraser="leace") and/or the concept
         # scores for the decorrelation repulse (cfg.repulse="whitened")
         self.eraser = eraser.to(self.device) if eraser is not None else None
-        needs_eraser = cfg.eraser == "leace" or cfg.repulse in (
+        needs_eraser = cfg.eraser == "leace" or cfg.align == "cka" or cfg.repulse in (
             "whitened",
             "whitened_cond",
             "raw",  # only the mean μ
@@ -144,7 +144,9 @@ class Trainer:
                 f"cfg.eraser={cfg.eraser!r}, cfg.repulse={cfg.repulse!r} need an "
                 "eraser, but none was passed to Trainer"
             )
-        self._target_eraser = self.eraser if cfg.eraser == "leace" else None
+        self._target_eraser = (
+            self.eraser if cfg.eraser == "leace" or cfg.align == "cka" else None
+        )
         self._whitened_repulse = cfg.repulse in ("whitened", "whitened_cond", "raw")
         self.val_pseudo_concepts = (
             val_pseudo_concepts.cpu().numpy()

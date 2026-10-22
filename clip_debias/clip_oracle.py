@@ -294,7 +294,25 @@ class Eraser(NamedTuple):
         return Eraser(*(t.to(device) for t in self))
 
 
-def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Eraser:
+def _weighted_mean_cov(
+    x: torch.Tensor, weights: torch.Tensor | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean and covariance of x (N, D), optionally with per-example weights."""
+    if weights is None:
+        mu = x.mean(0)
+        return mu, torch.cov((x - mu).T)
+    w = weights.double() / weights.double().sum()
+    mu = w @ x
+    xc = x - mu
+    return mu, (xc * w[:, None]).T @ xc / (1.0 - w.pow(2).sum())
+
+
+def fit_leace(
+    x: torch.Tensor,
+    cross_cov: torch.Tensor,
+    eps: float = 1e-6,
+    weights: torch.Tensor | None = None,
+) -> Eraser:
     """LEACE-style eraser (Belrose et al. 2023) for features x (N, D).
 
     Erases the span of `cross_cov` (D, r) — the covariance between x and the
@@ -302,11 +320,12 @@ def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Er
         x' = x − (x − μ) Mᵀ,   M = W⁺ Q Qᵀ W,   W = Σ^{-1/2},
     with Q an orthonormal basis of W·cross_cov.  Afterwards no linear function
     of x' covaries with those variables.  Also returns R = Qᵀ W, which maps x
-    to the whitened scores of what the eraser removes.  Fit in float64 on CPU.
+    to the whitened scores of what the eraser removes.  `weights` (N,) fits μ
+    and Σ on a reweighted distribution.  Fit in float64 on CPU.
     """
     x = x.detach().double().cpu()
-    mu = x.mean(0)
-    evals, evecs = torch.linalg.eigh(torch.cov((x - mu).T))
+    mu, cov = _weighted_mean_cov(x, weights)
+    evals, evecs = torch.linalg.eigh(cov)
     evals = evals.clamp_min(eps)
     W = (evecs / evals.sqrt()) @ evecs.T
     W_pinv = (evecs * evals.sqrt()) @ evecs.T
@@ -314,12 +333,18 @@ def fit_leace(x: torch.Tensor, cross_cov: torch.Tensor, eps: float = 1e-6) -> Er
     return Eraser(mu.float(), (W_pinv @ Q @ Q.T @ W).float(), (Q.T @ W).float())
 
 
-def fit_leace_eraser(v_i: torch.Tensor, subspace: torch.Tensor) -> Eraser:
+def fit_leace_eraser(
+    v_i: torch.Tensor, subspace: torch.Tensor, weights: torch.Tensor | None = None
+) -> Eraser:
     """Label-free eraser for the text subspace: cross-covariance of V_I with its
-    own subspace scores (V_I · b_k) is Σ Sᵀ."""
+    own subspace scores (V_I · b_k) is Σ Sᵀ.  With `weights` (e.g. pseudo-group
+    balancing weights) μ and Σ come from the reweighted train set, so directions
+    that only covary with the concept through the label correlation of the
+    biased set are not erased."""
     x = v_i.detach().double().cpu()
-    cross_cov = torch.cov((x - x.mean(0)).T) @ subspace.detach().double().cpu().T
-    return fit_leace(x, cross_cov)
+    _, cov = _weighted_mean_cov(x, weights)
+    cross_cov = cov @ subspace.detach().double().cpu().T
+    return fit_leace(x, cross_cov, weights=weights)
 
 
 def leace_project(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:

@@ -114,6 +114,22 @@ def decorrelation_loss(
         return corr.pow(2).mean(0).sum()
 
 
+def cka_alignment_loss(embed: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """
+    1 − linear CKA between backbone features E(x) (B, d) and a target
+    representation of the same images (B, D), e.g. the concept-erased CLIP
+    embedding.  CKA compares the centred batch Gram matrices, so it needs no
+    projection head and is invariant to rotations and isotropic scaling of
+    either side.
+    """
+    with torch.autocast(embed.device.type, enabled=False):
+        e = embed.float() - embed.float().mean(0)
+        t = target.float() - target.float().mean(0)
+        k, l = e @ e.T, t @ t.T
+        cka = (k * l).sum() / (k.norm() * l.norm() + 1e-8)
+        return 1.0 - cka
+
+
 # ── Loss group wrappers ───────────────────────────────────────────────────────
 
 
@@ -147,6 +163,7 @@ class BackboneLoss(nn.Module):
         self.lambda_repulse = cfg.lambda_repulse
         self.whitened_repulse = cfg.repulse in ("whitened", "whitened_cond", "raw")
         self.conditional_repulse = cfg.repulse == "whitened_cond"
+        self.cka_align = cfg.align == "cka"
 
     def forward(
         self,
@@ -162,11 +179,14 @@ class BackboneLoss(nn.Module):
     ):
         l_task = task_loss(logits, labels)
 
-        l_align = (
-            alignment_loss(proj, v_i_perp)
-            if (self.lambda_align > 0 and v_i_perp is not None)
-            else logits.new_zeros(())
-        )
+        if self.lambda_align > 0 and v_i_perp is not None:
+            l_align = (
+                cka_alignment_loss(embed, v_i_perp)
+                if self.cka_align
+                else alignment_loss(proj, v_i_perp)
+            )
+        else:
+            l_align = logits.new_zeros(())
 
         # Resolve subspace: prefer explicit subspace, fall back to v_t_hat
         _subspace = subspace

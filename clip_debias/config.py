@@ -278,6 +278,19 @@ class DebiasingConfig:
     #             covariance (label-free; see clip_oracle.fit_leace_eraser)
     eraser: str = "orth"
 
+    # Data the whitened eraser (and so the concept scores) is fitted on:
+    #   "biased"   — the train set as is (original)
+    #   "balanced" — the train set reweighted to balance the (target × CLIP
+    #                zero-shot concept) pseudo-groups, so directions that covary
+    #                with the concept only through its label correlation stay
+    eraser_fit: str = "biased"
+
+    # What L_align does:
+    #   "proj" — cosine between the projection head P(E(x)) and V_I_perp (original)
+    #   "cka"  — 1 − linear CKA between E(x) itself and the LEACE-erased CLIP
+    #            embedding of the same batch (no head; losses.cka_alignment_loss)
+    align: str = "proj"
+
     # What L_repulse penalises:
     #   "orth"     — sum_k (P(E(x)) · b_k)^2 over the text-subspace basis (original)
     #   "whitened" — squared batch correlation between E(x) and the whitened CLIP
