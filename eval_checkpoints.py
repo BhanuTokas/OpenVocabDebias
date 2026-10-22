@@ -281,7 +281,11 @@ def main():
             pairs = [concept_prompts(cfg, dataset)] + [
                 get_concept_prompts(a) for a in cfg.extra_concept_attrs
             ]
-            pkey = key + (cfg.clip_model, tuple(tuple(p) + tuple(n) for p, n in pairs))
+            pkey = key + (
+                cfg.clip_model,
+                tuple(tuple(p) + tuple(n) for p, n in pairs),
+                tuple(cfg.zs_cutoffs),
+            )
             if pkey not in pseudo_cache:
                 if oracle is None or oracle_name != cfg.clip_model:
                     print(f"\nLoading CLIP ({cfg.clip_model}) …")
@@ -292,7 +296,7 @@ def main():
                 v_va, _, c_va = embed_dataset(
                     oracle, val_loader.dataset, num_workers=args.num_workers
                 )
-                c_hat = zeroshot_concept_codes(oracle, pairs, v_va)
+                c_hat = zeroshot_concept_codes(oracle, pairs, v_va, cfg.zs_cutoffs)
                 print(
                     f"  zero-shot concept accuracy on val: {(c_hat == c_va).float().mean():.4f}"
                 )

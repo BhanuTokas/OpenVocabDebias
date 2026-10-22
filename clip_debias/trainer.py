@@ -137,6 +137,7 @@ class Trainer:
         needs_eraser = cfg.eraser == "leace" or cfg.repulse in (
             "whitened",
             "whitened_cond",
+            "raw",  # only the mean μ
         )
         if not self._erm_mode and needs_eraser and self.eraser is None:
             raise ValueError(
@@ -144,7 +145,7 @@ class Trainer:
                 "eraser, but none was passed to Trainer"
             )
         self._target_eraser = self.eraser if cfg.eraser == "leace" else None
-        self._whitened_repulse = cfg.repulse in ("whitened", "whitened_cond")
+        self._whitened_repulse = cfg.repulse in ("whitened", "whitened_cond", "raw")
         self.val_pseudo_concepts = (
             val_pseudo_concepts.cpu().numpy()
             if val_pseudo_concepts is not None
@@ -385,6 +386,8 @@ class Trainer:
     def _concept_scores(self, v_i: torch.Tensor | None) -> torch.Tensor | None:
         if not self._whitened_repulse or v_i is None:
             return None
+        if self.cfg.repulse == "raw":
+            return (v_i.float() - self.eraser.mu) @ self.subspace.float().T
         return whitened_concept_scores(v_i.float(), self.eraser)
 
     # ── Single training step ──────────────────────────────────────────────────

@@ -36,6 +36,7 @@ from clip_debias.clip_oracle import (
     compute_concept_subspace,
     embed_dataset,
     fit_leace_eraser,
+    fit_zeroshot_cutoffs,
     whitened_concept_scores,
     zeroshot_concept_labels,
 )
@@ -264,11 +265,21 @@ def parse_args():
     parser.add_argument(
         "--repulse",
         default="orth",
-        choices=["orth", "whitened", "whitened_cond"],
+        choices=["orth", "whitened", "whitened_cond", "raw"],
         help="What L_repulse penalises: P(E(x)) along the text-subspace basis, or "
         "the batch correlation between E(x) and the whitened CLIP concept scores "
-        "(label-free); 'whitened_cond' computes that correlation within each class. "
-        "Runs with lambda_repulse > 0 get a '_wrep' / '_wcrep' suffix.",
+        "(label-free); 'whitened_cond' computes that correlation within each class; "
+        "'raw' uses the centred raw text-subspace scores instead (ablation). "
+        "Runs with lambda_repulse > 0 get a '_wrep' / '_wcrep' / '_rrep' suffix.",
+    )
+    parser.add_argument(
+        "--zs_cutoff",
+        default="zero",
+        choices=["zero", "gmm"],
+        help="Cutoff of the CLIP zero-shot concept labels (pseudo-groups and the "
+        "val pseudo-groups for best_pseudo_wga.pt): 0, or fitted per attribute on "
+        "the unlabeled train scores with a 2-component Gaussian mixture. 'gmm' "
+        "adds a '_zsgmm' suffix to every run.",
     )
     parser.add_argument(
         "--lambda_repulse",
@@ -369,11 +380,6 @@ def main():
     v_va, _, c_va = embed_dataset(
         oracle, val_loader.dataset, num_workers=ref_cfg.num_workers
     )
-    val_pseudo = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_va)
-    print(
-        "  zero-shot concept accuracy on val (reported only, not used): "
-        f"{(val_pseudo == c_va).float().mean():.4f}"
-    )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
     need_eraser = (
@@ -381,17 +387,24 @@ def main():
         or args.repulse != "orth"
         or args.group_reweight == "propensity"
     )
-    eraser = train_weights = None
-    if need_eraser or args.group_reweight != "none":
+    eraser = train_weights = cutoffs = None
+    cutoff = 0.0
+    if need_eraser or args.group_reweight != "none" or args.zs_cutoff != "zero":
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
             oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
         )
+        if args.zs_cutoff == "gmm":
+            cutoffs = fit_zeroshot_cutoffs(oracle, [(prompts_pos, prompts_neg)], v_tr)
+            cutoff = cutoffs[0]
+            print(f"  fitted zero-shot cutoff (unlabeled train): {cutoff:+.4f}")
         if need_eraser:
             eraser = fit_leace_eraser(v_tr, subspace)
             print(f"  fitted whitened eraser on {len(v_tr):,} train embeddings")
         if args.group_reweight == "pseudo":
-            c_hat = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_tr)
+            c_hat = zeroshot_concept_labels(
+                oracle, prompts_pos, prompts_neg, v_tr, cutoff
+            )
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
@@ -402,6 +415,12 @@ def main():
         elif args.group_reweight == "propensity":
             z_tr = whitened_concept_scores(v_tr, eraser)
             train_weights = propensity_weights(y_tr, z_tr)
+
+    val_pseudo = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_va, cutoff)
+    print(
+        "  zero-shot concept accuracy on val (reported only, not used): "
+        f"{(val_pseudo == c_va).float().mean():.4f}"
+    )
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -445,7 +464,10 @@ def main():
             if args.eraser == "leace":
                 cfg = use_leace_eraser(cfg)
             if args.repulse != "orth":
-                cfg = use_whitened_repulse(cfg, args.repulse == "whitened_cond")
+                cfg = use_whitened_repulse(cfg, args.repulse)
+            if args.zs_cutoff != "zero":
+                cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
+                cfg.run_name += f"_zs{args.zs_cutoff}"
             if args.lambda_repulse is not None and cfg.lambda_repulse > 0:
                 cfg.lambda_repulse = args.lambda_repulse
                 cfg.run_name += f"_lrep{args.lambda_repulse:g}"

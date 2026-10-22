@@ -285,6 +285,9 @@ class DebiasingConfig:
     #                see losses.decorrelation_loss)
     #   "whitened_cond" — the same correlation computed within each class
     #                (partial correlation given the label)
+    #   "raw"      — ablation: the same correlation with the centred raw
+    #                text-subspace scores (V_I − μ)·Sᵀ instead of the whitened
+    #                ones (identical for k=1; differs when the k scores correlate)
     repulse: str = "orth"
 
     # Group-balanced resampling of the train set over (target × concept) groups:
@@ -293,6 +296,15 @@ class DebiasingConfig:
     #   | "propensity" (weights 1/p(y|z) on the whitened CLIP concept scores,
     #     label-free, no groups — see reweight.propensity_weights)
     group_reweight: str = "none"
+
+    # Cutoff of the CLIP zero-shot concept labels (training pseudo-groups and
+    # the val pseudo-groups behind best_pseudo_wga.pt):
+    #   "zero" — score > 0 (original)
+    #   "gmm"  — per attribute, fitted on the unlabeled train scores with a
+    #            2-component Gaussian mixture (clip_oracle.fit_zeroshot_cutoff);
+    #            the fitted values are recorded in zs_cutoffs
+    zs_cutoff: str = "zero"
+    zs_cutoffs: List[float] = field(default_factory=list)
 
     # Further spurious attributes (CelebA): the concept becomes the joint code
     # concept_attr + 2*extra[0] + ..., with one text subspace per attribute.
@@ -407,18 +419,22 @@ def use_leace_eraser(cfg: DebiasingConfig) -> DebiasingConfig:
     return cfg
 
 
-def use_whitened_repulse(
-    cfg: DebiasingConfig, conditional: bool = False
-) -> DebiasingConfig:
-    """Replace L_repulse with the E(x)–concept-score decorrelation loss
-    (class-conditional if `conditional`).
+REPULSE_SUFFIX = {"whitened": "_wrep", "whitened_cond": "_wcrep", "raw": "_rrep"}
 
-    Only affects runs with lambda_repulse > 0; those get a "_wrep" suffix, or
-    "_wcrep" for the conditional version.
+
+def use_whitened_repulse(
+    cfg: DebiasingConfig, mode: str = "whitened"
+) -> DebiasingConfig:
+    """Replace L_repulse with the E(x)–concept-score decorrelation loss:
+    mode "whitened", "whitened_cond" (within each class) or "raw" (centred raw
+    text-subspace scores; ablation).
+
+    Only affects runs with lambda_repulse > 0; those get a "_wrep", "_wcrep"
+    or "_rrep" suffix.
     """
     if cfg.lambda_repulse > 0:
-        cfg.repulse = "whitened_cond" if conditional else "whitened"
-        cfg.run_name += "_wcrep" if conditional else "_wrep"
+        cfg.repulse = mode
+        cfg.run_name += REPULSE_SUFFIX[mode]
     return cfg
 
 

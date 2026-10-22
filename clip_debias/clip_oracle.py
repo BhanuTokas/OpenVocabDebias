@@ -29,8 +29,9 @@ diverge in the training logs.  If they still track each other, increase k.
 
 from __future__ import annotations
 
-from typing import List, NamedTuple, Tuple
+from typing import List, NamedTuple, Sequence, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
@@ -351,31 +352,83 @@ def embed_dataset(
 
 
 @torch.no_grad()
-def zeroshot_concept_labels(
+def concept_margin(
     oracle: CLIPOracle,
     prompts_pos: List[str],
     prompts_neg: List[str],
     v_i: torch.Tensor,
 ) -> torch.Tensor:
-    """CLIP zero-shot concept prediction: 1 if V_I is closer to the mean positive
-    prompt embedding than to the mean negative one."""
+    """(N,) CLIP zero-shot concept score: V_I · (mean positive − mean negative
+    prompt embedding)."""
     d = oracle.encode_text(prompts_pos).mean(0) - oracle.encode_text(prompts_neg).mean(
         0
     )
-    return (v_i.to(d.device) @ d > 0).long().cpu()
+    return (v_i.to(d.device).float() @ d.float()).cpu()
 
 
-@torch.no_grad()
+def fit_zeroshot_cutoff(scores: torch.Tensor) -> float:
+    """Label-free cutoff for a zero-shot concept score: fit a two-component 1-D
+    Gaussian mixture to the unlabeled scores and return the point between the
+    component means where the posteriors are equal (so the mixture's own
+    estimate of the class proportions is used).  Falls back to the midpoint of
+    the means if the weighted components do not cross between them."""
+    from sklearn.mixture import GaussianMixture
+
+    g = GaussianMixture(2, n_init=3, random_state=0).fit(
+        scores.double().numpy()[:, None]
+    )
+    m, sd, w = g.means_.ravel(), np.sqrt(g.covariances_.ravel()), g.weights_
+    lo, hi = np.argsort(m)
+    grid = np.linspace(m[lo], m[hi], 2001)
+
+    def log_post(k):
+        return np.log(w[k]) - np.log(sd[k]) - 0.5 * ((grid - m[k]) / sd[k]) ** 2
+
+    diff = log_post(hi) - log_post(lo)  # < 0 near m[lo], > 0 near m[hi]
+    if diff[0] < 0 < diff[-1]:
+        return float(grid[np.argmax(diff > 0)])
+    return float((m[lo] + m[hi]) / 2)
+
+
+def fit_zeroshot_cutoffs(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    v_i: torch.Tensor,
+) -> List[float]:
+    """One fitted cutoff per attribute (see fit_zeroshot_cutoff), from the
+    unlabeled train embeddings."""
+    return [
+        fit_zeroshot_cutoff(concept_margin(oracle, pos, neg, v_i))
+        for pos, neg in prompt_pairs
+    ]
+
+
+def zeroshot_concept_labels(
+    oracle: CLIPOracle,
+    prompts_pos: List[str],
+    prompts_neg: List[str],
+    v_i: torch.Tensor,
+    cutoff: float = 0.0,
+) -> torch.Tensor:
+    """CLIP zero-shot concept prediction: 1 if the concept score exceeds
+    `cutoff` (0: V_I is closer to the mean positive prompt embedding than to
+    the mean negative one)."""
+    return (concept_margin(oracle, prompts_pos, prompts_neg, v_i) > cutoff).long()
+
+
 def zeroshot_concept_codes(
     oracle: CLIPOracle,
     prompt_pairs: List[Tuple[List[str], List[str]]],
     v_i: torch.Tensor,
+    cutoffs: Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Joint zero-shot concept code sum_j 2^j * c_j over several attributes
-    (attribute j = prompt_pairs[j]); one attribute gives the plain 0/1 label."""
+    (attribute j = prompt_pairs[j], cut at cutoffs[j], default 0); one
+    attribute gives the plain 0/1 label."""
+    cutoffs = list(cutoffs) if cutoffs else [0.0] * len(prompt_pairs)
     code = torch.zeros(len(v_i), dtype=torch.long)
     for j, (pos, neg) in enumerate(prompt_pairs):
-        code += zeroshot_concept_labels(oracle, pos, neg, v_i) << j
+        code += zeroshot_concept_labels(oracle, pos, neg, v_i, cutoffs[j]) << j
     return code
 
 

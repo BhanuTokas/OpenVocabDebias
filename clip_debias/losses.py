@@ -145,7 +145,7 @@ class BackboneLoss(nn.Module):
         self.lambda_task = cfg.lambda_task
         self.lambda_align = cfg.lambda_align
         self.lambda_repulse = cfg.lambda_repulse
-        self.whitened_repulse = cfg.repulse in ("whitened", "whitened_cond")
+        self.whitened_repulse = cfg.repulse in ("whitened", "whitened_cond", "raw")
         self.conditional_repulse = cfg.repulse == "whitened_cond"
 
     def forward(
