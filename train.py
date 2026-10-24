@@ -328,7 +328,9 @@ def main():
         for pos, neg in extra:
             print(f"      {pos}  vs  {neg}")
     if not prompt_pairs:
-        raise SystemExit("no concept prompts: pass --prompt_attrs and/or --extra_prompts")
+        raise SystemExit(
+            "no concept prompts: pass --prompt_attrs and/or --extra_prompts"
+        )
     custom_pairs = args.prompt_attrs is not None or bool(args.extra_prompts)
 
     shared_overrides = dict(

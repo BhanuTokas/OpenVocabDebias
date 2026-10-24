@@ -39,7 +39,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from clip_debias.clip_oracle import CLIPOracle, compute_multi_concept_subspace, embed_dataset
+from clip_debias.clip_oracle import (
+    CLIPOracle,
+    compute_multi_concept_subspace,
+    embed_dataset,
+)
 from clip_debias.config import get_concept_prompts
 from clip_debias.data import build_dataloaders
 from clip_debias.discovery import (
@@ -57,7 +61,9 @@ from eval_checkpoints import concept_prompts, load_run_cfg
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("run_dir", help="run directory containing config.json and the checkpoint")
+    p.add_argument(
+        "run_dir", help="run directory containing config.json and the checkpoint"
+    )
     p.add_argument("--ckpt", default="best_pseudo_wga.pt")
     p.add_argument(
         "--prompted",
@@ -66,7 +72,9 @@ def parse_args():
         help="Remove the concepts the run was prompted with (config) or nothing",
     )
     p.add_argument("--celeba_root", default=None)
-    p.add_argument("--objects", action="store_true", help="add ImageNet classes to the vocabulary")
+    p.add_argument(
+        "--objects", action="store_true", help="add ImageNet classes to the vocabulary"
+    )
     p.add_argument("--n_phrases", type=int, default=5)
     p.add_argument("--out", default="proposals.json")
     p.add_argument("--report_truth", action="store_true")
@@ -90,24 +98,34 @@ def main():
         args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
     )
     loaders = (
-        build_waterbirds_dataloaders(cfg) if dataset == "waterbirds" else build_dataloaders(cfg)
+        build_waterbirds_dataloaders(cfg)
+        if dataset == "waterbirds"
+        else build_dataloaders(cfg)
     )
     val_ds = loaders[1].dataset
 
     model = build_model(cfg, num_classes=2)
     state = torch.load(os.path.join(args.run_dir, args.ckpt), map_location=cfg.device)
     model.load_state_dict(state.get("model_state", state))
-    loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers)
+    loader = DataLoader(
+        val_ds, batch_size=args.batch_size, num_workers=args.num_workers
+    )
     feats = extract_features(model, loader, cfg.device, use_amp=cfg.amp)
     y, err = feats["targets"].astype(int), feats["preds"] != feats["targets"]
     print(f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: val error {err.mean():.3f}")
     for k in np.unique(y):
-        print(f"  class {k}: {int((err & (y == k)).sum())} errors / {int((y == k).sum())}")
+        print(
+            f"  class {k}: {int((err & (y == k)).sum())} errors / {int((y == k).sum())}"
+        )
 
     oracle = CLIPOracle(cfg.clip_model, device=cfg.device)
     v, _, c_true = embed_dataset(oracle, val_ds, num_workers=args.num_workers)
     pairs = prompted_pairs(cfg, dataset) if args.prompted == "config" else []
-    S = compute_multi_concept_subspace(oracle, pairs, k=cfg.concept_subspace_k) if pairs else None
+    S = (
+        compute_multi_concept_subspace(oracle, pairs, k=cfg.concept_subspace_k)
+        if pairs
+        else None
+    )
     if pairs:
         print(f"  removing {len(pairs)} prompted concept(s), subspace {tuple(S.shape)}")
 
@@ -129,18 +147,25 @@ def main():
                 corr_y=round(float(np.corrcoef(z[:, j], y)[0, 1]), 3),
             ),
         )
-        print(f"\n  direction from class {k} errors   corr(score, y) {entry['scores']['corr_y']:+.2f}")
+        print(
+            f"\n  direction from class {k} errors   corr(score, y) {entry['scores']['corr_y']:+.2f}"
+        )
         print("    + " + ", ".join(f"{p} ({s:+.2f})" for p, s in pos))
         print("    − " + ", ".join(f"{p} ({s:+.2f})" for p, s in neg))
         if args.report_truth:
             n_attr = 1 + len(cfg.extra_concept_attrs)
             names = [cfg.concept_attr] + list(cfg.extra_concept_attrs)
             truth = {
-                names[b]: round(float(np.corrcoef(z[:, j], (c_true.numpy() >> b) & 1)[0, 1]), 3)
+                names[b]: round(
+                    float(np.corrcoef(z[:, j], (c_true.numpy() >> b) & 1)[0, 1]), 3
+                )
                 for b in range(n_attr)
             }
             entry["truth_corr"] = truth
-            print("    (analysis) corr with true " + "  ".join(f"{a} {t:+.2f}" for a, t in truth.items()))
+            print(
+                "    (analysis) corr with true "
+                + "  ".join(f"{a} {t:+.2f}" for a, t in truth.items())
+            )
         proposals.append(entry)
 
     out = dict(
@@ -153,8 +178,10 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nProposals written to {args.out}: review, edit, set \"accept\": true, "
-          "then train with --extra_prompts")
+    print(
+        f'\nProposals written to {args.out}: review, edit, set "accept": true, '
+        "then train with --extra_prompts"
+    )
 
 
 if __name__ == "__main__":
