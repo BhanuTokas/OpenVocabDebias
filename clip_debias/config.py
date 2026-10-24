@@ -323,6 +323,14 @@ class DebiasingConfig:
     # concept_attr + 2*extra[0] + ..., with one text subspace per attribute.
     extra_concept_attrs: List[str] = field(default_factory=list)
 
+    # Concept prompt pairs actually used (subspace, eraser, pseudo-groups, val
+    # pseudo-groups), as [[pos...], [neg...]] per concept.  Empty: derived from
+    # concept_attr + extra_concept_attrs (CelebA) or the prompt set (Waterbirds).
+    # Set when attributes are left unprompted (--prompt_attrs) or discovered and
+    # confirmed prompt pairs are added (--extra_prompts; discover_biases.py).
+    # Evaluation always uses the dataset's true attributes.
+    prompt_pairs: List[List[List[str]]] = field(default_factory=list)
+
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
     # Override by passing concept_prompts_pos / concept_prompts_neg explicitly.

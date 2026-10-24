@@ -278,9 +278,12 @@ def main():
         if args.pseudo_from_epochs and not os.path.isfile(
             os.path.join(run_dir, PSEUDO_CKPT)
         ):
-            pairs = [concept_prompts(cfg, dataset)] + [
-                get_concept_prompts(a) for a in cfg.extra_concept_attrs
-            ]
+            pairs = (
+                [(list(p), list(n)) for p, n in cfg.prompt_pairs]
+                if cfg.prompt_pairs
+                else [concept_prompts(cfg, dataset)]
+                + [get_concept_prompts(a) for a in cfg.extra_concept_attrs]
+            )
             pkey = key + (
                 cfg.clip_model,
                 tuple(tuple(p) + tuple(n) for p, n in pairs),

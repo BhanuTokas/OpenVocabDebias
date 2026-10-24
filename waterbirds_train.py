@@ -33,12 +33,12 @@ from torch.utils.data import DataLoader, Subset
 
 from clip_debias.clip_oracle import (
     CLIPOracle,
-    compute_concept_subspace,
+    compute_multi_concept_subspace,
     embed_dataset,
     fit_leace_eraser,
     fit_zeroshot_cutoffs,
     whitened_concept_scores,
-    zeroshot_concept_labels,
+    zeroshot_concept_codes,
 )
 from clip_debias.config import (
     DebiasingConfig,
@@ -57,6 +57,7 @@ from clip_debias.config import (
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
+from clip_debias.discovery import load_prompt_file
 from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
@@ -330,10 +331,18 @@ def parse_args():
         "'_enc-<name>' suffix to every run.",
     )
     parser.add_argument(
+        "--extra_prompts",
+        default=None,
+        help="JSON file from discover_biases.py: its accepted (pos, neg) prompt "
+        "pairs are added as further concepts (subspace, eraser, pseudo-groups). "
+        "Adds an '_xp-<file stem>' suffix.",
+    )
+    parser.add_argument(
         "--prompts",
         default="words",
-        choices=list(PROMPT_SETS),
-        help="Concept prompt set for the subspace, eraser and pseudo-labels. "
+        choices=list(PROMPT_SETS) + ["none"],
+        help="Concept prompt set for the subspace, eraser and pseudo-labels "
+        "('none': only the --extra_prompts pairs). "
         "Anything but 'words' adds a '_p<set>' suffix to every run.",
     )
     return parser.parse_args()
@@ -384,17 +393,22 @@ def main():
 
     # pos_words = get_synonyms("water")
     # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
-    prompts_pos, prompts_neg = PROMPT_SETS[args.prompts]
+    prompt_pairs = [] if args.prompts == "none" else [PROMPT_SETS[args.prompts]]
     print(f"  prompts: {args.prompts}")
-    print(f"  pos: {prompts_pos}")
-    print(f"  neg: {prompts_neg}")
+    if args.extra_prompts:
+        prompt_pairs = prompt_pairs + load_prompt_file(args.extra_prompts)
+        print(f"  + confirmed prompt pairs from {args.extra_prompts}")
+    if not prompt_pairs:
+        raise SystemExit("--prompts none needs --extra_prompts")
+    for pos, neg in prompt_pairs:
+        print(f"  pos: {pos}")
+        print(f"  neg: {neg}")
+    prompts_pos, prompts_neg = prompt_pairs[0]
+    custom_pairs = args.prompts == "none" or bool(args.extra_prompts)
 
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
-    subspace = compute_concept_subspace(
-        oracle,
-        prompts_pos=prompts_pos,
-        prompts_neg=prompts_neg,
-        k=args.concept_subspace_k,
+    subspace = compute_multi_concept_subspace(
+        oracle, prompt_pairs, k=args.concept_subspace_k
     )
     print(f"  subspace shape: {tuple(subspace.shape)}")
 
@@ -412,22 +426,18 @@ def main():
         or args.group_reweight == "propensity"
     )
     eraser = train_weights = cutoffs = None
-    cutoff = 0.0
     if need_eraser or args.group_reweight != "none" or args.zs_cutoff != "zero":
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
             oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
         )
         if args.zs_cutoff == "gmm":
-            cutoffs = fit_zeroshot_cutoffs(oracle, [(prompts_pos, prompts_neg)], v_tr)
-            cutoff = cutoffs[0]
-            print(f"  fitted zero-shot cutoff (unlabeled train): {cutoff:+.4f}")
+            cutoffs = fit_zeroshot_cutoffs(oracle, prompt_pairs, v_tr)
+            print(f"  fitted zero-shot cutoffs (unlabeled train): {cutoffs}")
         if need_eraser:
             fit_w = None
             if args.eraser_fit == "balanced":
-                c_fit = zeroshot_concept_labels(
-                    oracle, prompts_pos, prompts_neg, v_tr, cutoff
-                )
+                c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
                 fit_w = group_weights(y_tr, c_fit)
             eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
             print(
@@ -435,9 +445,7 @@ def main():
                 f"({args.eraser_fit})"
             )
         if args.group_reweight == "pseudo":
-            c_hat = zeroshot_concept_labels(
-                oracle, prompts_pos, prompts_neg, v_tr, cutoff
-            )
+            c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
@@ -449,7 +457,7 @@ def main():
             z_tr = whitened_concept_scores(v_tr, eraser)
             train_weights = propensity_weights(y_tr, z_tr)
 
-    val_pseudo = zeroshot_concept_labels(oracle, prompts_pos, prompts_neg, v_va, cutoff)
+    val_pseudo = zeroshot_concept_codes(oracle, prompt_pairs, v_va, cutoffs)
     print(
         "  zero-shot concept accuracy on val (reported only, not used): "
         f"{(val_pseudo == c_va).float().mean():.4f}"
@@ -486,6 +494,10 @@ def main():
             )
             cfg.concept_attr = "place"
             cfg.concept_prompts_pos, cfg.concept_prompts_neg = prompts_pos, prompts_neg
+            if custom_pairs:
+                cfg.prompt_pairs = [[list(p), list(n)] for p, n in prompt_pairs]
+            if args.extra_prompts:
+                cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
             if args.prompts != "words":
                 cfg.run_name += f"_p{args.prompts}"
             if args.clip_model != DebiasingConfig.clip_model:

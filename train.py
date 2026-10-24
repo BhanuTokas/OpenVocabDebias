@@ -50,6 +50,7 @@ from clip_debias.config import (
     use_group_reweighting,
     get_concept_prompts,
 )
+from clip_debias.discovery import load_prompt_file
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
@@ -128,6 +129,23 @@ def parse_args():
         "google/siglip-base-patch16-224) or an OpenCLIP hf-hub:<repo> id (e.g. "
         "hf-hub:timm/PE-Core-B-16).  A non-default encoder adds an "
         "'_enc-<name>' suffix to every run.",
+    )
+    parser.add_argument(
+        "--prompt_attrs",
+        nargs="*",
+        default=None,
+        help="Attributes whose library prompts are used for training (subspace, "
+        "eraser, pseudo-groups).  Default: --concept_attr plus "
+        "--extra_concept_attrs.  Evaluation still uses all of those true "
+        "attributes, so e.g. '--extra_concept_attrs Young --prompt_attrs Young' "
+        "leaves Male unprompted.  Adds a '_pa-<attrs>' suffix.",
+    )
+    parser.add_argument(
+        "--extra_prompts",
+        default=None,
+        help="JSON file from discover_biases.py: its accepted (pos, neg) prompt "
+        "pairs are added as further concepts (subspace, eraser, pseudo-groups). "
+        "Adds an '_xp-<file stem>' suffix.",
     )
     parser.add_argument(
         "--extra_concept_attrs",
@@ -300,6 +318,18 @@ def main():
     for attr in args.extra_concept_attrs:
         prompt_pairs.append(get_concept_prompts(attr))
         print(f"  extra concept '{attr}': {len(prompt_pairs[-1][0])} prompt pairs")
+    if args.prompt_attrs is not None:
+        prompt_pairs = [get_concept_prompts(a) for a in args.prompt_attrs]
+        print(f"  prompted attributes: {args.prompt_attrs}")
+    if args.extra_prompts:
+        extra = load_prompt_file(args.extra_prompts)
+        prompt_pairs = prompt_pairs + extra
+        print(f"  + {len(extra)} confirmed prompt pair(s) from {args.extra_prompts}:")
+        for pos, neg in extra:
+            print(f"      {pos}  vs  {neg}")
+    if not prompt_pairs:
+        raise SystemExit("no concept prompts: pass --prompt_attrs and/or --extra_prompts")
+    custom_pairs = args.prompt_attrs is not None or bool(args.extra_prompts)
 
     shared_overrides = dict(
         celeba_root=args.celeba_root,
@@ -317,6 +347,9 @@ def main():
         clip_model=args.clip_model,
         concept_prompts_pos=prompts_pos,
         concept_prompts_neg=prompts_neg,
+        prompt_pairs=(
+            [[list(p), list(n)] for p, n in prompt_pairs] if custom_pairs else []
+        ),
         concept_subspace_k=args.concept_subspace_k,
         sequential_phase_switch_epoch=args.sequential_switch_epoch,
     )
@@ -430,6 +463,10 @@ def main():
             if args.eraser_fit != "biased":
                 cfg.eraser_fit = args.eraser_fit
                 cfg.run_name += "_efbal"
+            if args.prompt_attrs is not None:
+                cfg.run_name += "_pa-" + ("-".join(args.prompt_attrs) or "none")
+            if args.extra_prompts:
+                cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
             if args.zs_cutoff != "zero":
                 cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
                 cfg.run_name += f"_zs{args.zs_cutoff}"
