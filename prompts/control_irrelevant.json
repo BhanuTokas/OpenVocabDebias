@@ -1,0 +1,11 @@
+{
+  "note": "Control for discovery: an image-quality pair unrelated to the Waterbirds background. CLIP B/32 on the train set: 56% positive, corr with true place -0.15, with y -0.13 (discovered forest/ocean pair: 0.64).",
+  "proposals": [
+    {
+      "name": "control_blurry_sharp",
+      "pos": ["a blurry photo", "an out of focus photo", "a low resolution photo"],
+      "neg": ["a sharp photo", "a high resolution photo", "a crisp, detailed photo"],
+      "accept": true
+    }
+  ]
+}
