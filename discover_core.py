@@ -57,7 +57,9 @@ from eval_checkpoints import load_run_cfg
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("run_dir", help="run directory containing config.json and the checkpoint")
+    p.add_argument(
+        "run_dir", help="run directory containing config.json and the checkpoint"
+    )
     p.add_argument("--ckpt", default="best_pseudo_wga.pt")
     p.add_argument("--celeba_root", default=None)
     p.add_argument(
@@ -82,14 +84,18 @@ def main():
         args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
     )
     loaders = (
-        build_waterbirds_dataloaders(cfg) if dataset == "waterbirds" else build_dataloaders(cfg)
+        build_waterbirds_dataloaders(cfg)
+        if dataset == "waterbirds"
+        else build_dataloaders(cfg)
     )
     val_ds = loaders[1].dataset
 
     model = build_model(cfg, num_classes=2)
     state = torch.load(os.path.join(args.run_dir, args.ckpt), map_location=cfg.device)
     model.load_state_dict(state.get("model_state", state))
-    loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers)
+    loader = DataLoader(
+        val_ds, batch_size=args.batch_size, num_workers=args.num_workers
+    )
     feats = extract_features(model, loader, cfg.device, use_amp=cfg.amp)
     y, err = feats["targets"].astype(int), feats["preds"] != feats["targets"]
     print(f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: val error {err.mean():.3f}")
@@ -99,7 +105,9 @@ def main():
     pairs = prompted_pairs(cfg, dataset)
     S = compute_multi_concept_subspace(oracle, pairs, k=cfg.concept_subspace_k)
     groups = zeroshot_concept_codes(oracle, pairs, v, cfg.zs_cutoffs or None).numpy()
-    print(f"  {len(pairs)} prompted concept(s) → pseudo-groups; subspace {tuple(S.shape)}")
+    print(
+        f"  {len(pairs)} prompted concept(s) → pseudo-groups; subspace {tuple(S.shape)}"
+    )
 
     dirs, tags = core_directions(v, y, groups, err, min_errors=args.min_errors)
     z = residual_scores(v, S, dirs)
@@ -108,7 +116,9 @@ def main():
     names = [cfg.concept_attr] + list(cfg.extra_concept_attrs)
     entries = []
     for j, tag in enumerate(tags):
-        zj = z[:, j] * float(np.sign(np.corrcoef(z[:, j], y)[0, 1]) or 1.0)  # toward class 1
+        zj = z[:, j] * float(
+            np.sign(np.corrcoef(z[:, j], y)[0, 1]) or 1.0
+        )  # toward class 1
         pos, neg = name_scores(oracle, vocab, v, zj, n=args.n_phrases)
         entry = dict(
             tag=tag,
@@ -125,14 +135,20 @@ def main():
             for b in range(n_attr):
                 cb = (c_true.numpy() >> b) & 1
                 acc = {
-                    f"y{a}_{names[b]}{t}": round(float(((zz > 0) == a)[(y == a) & (cb == t)].mean()), 3)
+                    f"y{a}_{names[b]}{t}": round(
+                        float(((zz > 0) == a)[(y == a) & (cb == t)].mean()), 3
+                    )
                     for a in (0, 1)
                     for t in (0, 1)
                 }
-                truth[names[b]] = dict(corr=round(float(np.corrcoef(zz, cb)[0, 1]), 3), y_acc=acc)
+                truth[names[b]] = dict(
+                    corr=round(float(np.corrcoef(zz, cb)[0, 1]), 3), y_acc=acc
+                )
                 print(
                     f"    (analysis) corr with true {names[b]} {truth[names[b]]['corr']:+.2f};"
-                    " y-acc per (y, " + names[b] + "): "
+                    " y-acc per (y, "
+                    + names[b]
+                    + "): "
                     + " ".join(f"{a:.2f}" for a in acc.values())
                 )
             entry["truth"] = truth
@@ -149,8 +165,10 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nCore directions written to {args.out} (pooled accepted); "
-          "train with --core_dirs and --lambda_promote")
+    print(
+        f"\nCore directions written to {args.out} (pooled accepted); "
+        "train with --core_dirs and --lambda_promote"
+    )
 
 
 if __name__ == "__main__":

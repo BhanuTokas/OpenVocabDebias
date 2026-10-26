@@ -316,7 +316,9 @@ def core_directions(
                 continue
             sign = 1.0 if k == 1 else -1.0
             dirs.append(sign * (v[m & ~err].mean(0) - v[m & err].mean(0)))
-            tags.append(f"class {int(k)} x pseudo-group {int(g)} ({ne} errors / {ne + nc})")
+            tags.append(
+                f"class {int(k)} x pseudo-group {int(g)} ({ne} errors / {ne + nc})"
+            )
     if not dirs:
         raise ValueError(f"no (class x pseudo-group) cell with >= {min_errors} errors")
     d = F.normalize(torch.stack(dirs).float(), dim=-1)
