@@ -1,0 +1,6 @@
+{
+  "note": "Written core concept for promotion (Waterbirds): the class names. Residual to the bias subspace (B/32 test): corr y 0.55, corr place -0.02, y-acc per (y, place) 0.80/0.76/0.80/0.77 -- a 1-D bias-free CLIP teacher; the control for discovered core directions.",
+  "proposals": [
+    {"name": "core_class_names", "pos": ["a photo of a waterbird"], "neg": ["a photo of a landbird"], "accept": true}
+  ]
+}

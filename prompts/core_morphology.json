@@ -1,0 +1,11 @@
+{
+  "note": "Written core concept for promotion (Waterbirds): bird morphology, worded from the discovered core direction's names. Residual to the bias subspace (B/32 test): corr y 0.43, corr place -0.06 (raw text margin +0.38).",
+  "proposals": [
+    {
+      "name": "core_morphology",
+      "pos": ["a long-necked wading bird", "a bird with a long thin beak", "a seabird with a long neck", "a large bird with long legs"],
+      "neg": ["a small songbird perched on a branch", "a small bird with a short beak", "a songbird", "a small perching bird"],
+      "accept": true
+    }
+  ]
+}

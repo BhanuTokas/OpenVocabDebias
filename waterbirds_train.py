@@ -57,7 +57,7 @@ from clip_debias.config import (
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
-from clip_debias.discovery import load_core_dirs, load_prompt_file
+from clip_debias.discovery import load_core_dirs, load_prompt_file, prompt_directions
 from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
@@ -345,11 +345,19 @@ def parse_args():
         "concept subspace).  Needs --lambda_promote > 0.",
     )
     parser.add_argument(
+        "--core_prompts",
+        default=None,
+        help="Written alternative to --core_dirs: a JSON file of accepted (pos, neg) "
+        "prompt pairs (discover_biases.py format), each promoted as the direction "
+        "mean(pos) - mean(neg), residual to the concept subspace.",
+    )
+    parser.add_argument(
         "--lambda_promote",
         type=float,
         default=0.0,
         help="Weight of the core-promotion loss for runs with a debiasing term. "
-        "Adds a '_core_lpro<v>' suffix.",
+        "Adds a '_core_lpro<v>' suffix (--core_dirs) or '_corep-<file stem>_lpro<v>' "
+        "(--core_prompts).",
     )
     parser.add_argument(
         "--prompts",
@@ -433,8 +441,11 @@ def main():
     )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
-    if bool(args.core_dirs) != (args.lambda_promote > 0):
-        raise SystemExit("--core_dirs and --lambda_promote > 0 go together")
+    core_file = args.core_dirs or args.core_prompts
+    if args.core_dirs and args.core_prompts:
+        raise SystemExit("pass --core_dirs or --core_prompts, not both")
+    if bool(core_file) != (args.lambda_promote > 0):
+        raise SystemExit("--core_dirs/--core_prompts and --lambda_promote > 0 go together")
     need_eraser = (
         args.eraser == "leace"
         or args.align == "cka"
@@ -457,12 +468,16 @@ def main():
                 c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
                 fit_w = group_weights(y_tr, c_fit)
             eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
-            if args.core_dirs:
-                core = load_core_dirs(args.core_dirs)
+            if core_file:
+                core = (
+                    load_core_dirs(args.core_dirs)
+                    if args.core_dirs
+                    else prompt_directions(oracle, load_prompt_file(args.core_prompts))
+                )
                 core_eraser = fit_leace_eraser(
                     v_tr, torch.cat([subspace.float().cpu(), core]), weights=fit_w
                 )
-                print(f"  {len(core)} core direction(s) from {args.core_dirs}")
+                print(f"  {len(core)} core direction(s) from {core_file}")
             print(
                 f"  fitted whitened eraser on {len(v_tr):,} train embeddings "
                 f"({args.eraser_fit})"
@@ -549,8 +564,10 @@ def main():
                 cfg.lambda_repulse = args.lambda_repulse
                 cfg.run_name += f"_lrep{args.lambda_repulse:g}"
             if args.lambda_promote > 0 and run_name != "erm":
-                cfg.core_dirs, cfg.lambda_promote = args.core_dirs, args.lambda_promote
-                cfg.run_name += f"_core_lpro{args.lambda_promote:g}"
+                cfg.core_dirs, cfg.lambda_promote = core_file, args.lambda_promote
+                cfg.run_name += (
+                    "_core" if args.core_dirs else "_corep-" + Path(core_file).stem
+                ) + f"_lpro{args.lambda_promote:g}"
             if args.group_reweight != "none":
                 cfg = use_group_reweighting(cfg, args.group_reweight)
 

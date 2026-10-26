@@ -332,3 +332,18 @@ def load_core_dirs(path: str) -> torch.Tensor:
     if not dirs:
         raise ValueError(f"no accepted core directions in {path}")
     return torch.tensor(dirs, dtype=torch.float32)
+
+
+@torch.no_grad()
+def prompt_directions(
+    oracle: CLIPOracle, pairs: List[Tuple[List[str], List[str]]]
+) -> torch.Tensor:
+    """Written core concepts as CLIP directions (r, D): per (pos, neg) pair, the
+    unit difference of the mean prompt embeddings.  Used like discovered core
+    directions; scored residual to the concept subspace, the raw text margin's
+    habitat/background component is removed."""
+    dirs = [
+        oracle.encode_text(pos).float().mean(0) - oracle.encode_text(neg).float().mean(0)
+        for pos, neg in pairs
+    ]
+    return F.normalize(torch.stack(dirs).cpu(), dim=-1)
