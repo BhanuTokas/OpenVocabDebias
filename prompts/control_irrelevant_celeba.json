@@ -1,0 +1,11 @@
+{
+  "note": "CelebA control for discovery: a background pair unrelated to the faces. CLIP B/32 on the train set: 63% positive, corr with Blond +0.03, Male +0.02, Young -0.01 (discovered Male pair: -0.81 with Male). blurry/sharp is unusable here: 82% positive, corr Male -0.19.",
+  "proposals": [
+    {
+      "name": "control_plain_busy_background",
+      "pos": ["a photo with a plain background", "a photo with a simple background", "a studio photo"],
+      "neg": ["a photo with a busy background", "a photo with a cluttered background", "a candid photo"],
+      "accept": true
+    }
+  ]
+}
