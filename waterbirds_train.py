@@ -445,7 +445,9 @@ def main():
     if args.core_dirs and args.core_prompts:
         raise SystemExit("pass --core_dirs or --core_prompts, not both")
     if bool(core_file) != (args.lambda_promote > 0):
-        raise SystemExit("--core_dirs/--core_prompts and --lambda_promote > 0 go together")
+        raise SystemExit(
+            "--core_dirs/--core_prompts and --lambda_promote > 0 go together"
+        )
     need_eraser = (
         args.eraser == "leace"
         or args.align == "cka"
