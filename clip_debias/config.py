@@ -303,6 +303,14 @@ class DebiasingConfig:
     #                ones (identical for k=1; differs when the k scores correlate)
     repulse: str = "orth"
 
+    # Core-concept promotion (discover_core.py): CLIP image-space directions the
+    # model under-uses, scored residual to the concept subspace (one joint
+    # whitened fit, concepts first).  A linear head on E(x) is trained to
+    # predict those scores; L_promote = mean_k (1 − corr(head_k, score_k)^2).
+    # core_dirs is the directions file, recorded for reference.
+    core_dirs: str = ""
+    lambda_promote: float = 0.0
+
     # Group-balanced resampling of the train set over (target × concept) groups:
     #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
     #   | "oracle" (true concept labels — reference upper bound only)

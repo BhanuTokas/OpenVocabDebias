@@ -240,3 +240,95 @@ def load_prompt_file(path: str) -> List[Tuple[List[str], List[str]]]:
     if not pairs:
         raise ValueError(f"no accepted prompt pairs in {path}")
     return pairs
+
+
+# ── Core concepts ─────────────────────────────────────────────────────────────
+# The mirror image of bias discovery: within a (class × pseudo-group) cell the
+# prompted bias is held fixed, so the difference between the mean CLIP image
+# embedding of correctly and wrongly classified images points at cues the model
+# under-uses.  Unlike biases, these are kept as image-space directions: words
+# for object parts carry their habitat in CLIP text space ("wading" → water),
+# so prompts re-introduce the bias.  Phrases only name a direction afterwards.
+
+# Object parts and appearance, for naming core directions (birds: Waterbirds).
+BIRD_PARTS = [
+    "webbed feet",
+    "long thin legs",
+    "short legs",
+    "perching feet",
+    "talons",
+    "a long thin beak",
+    "a short conical beak",
+    "a hooked beak",
+    "a flat wide bill",
+    "a long neck",
+    "a short neck",
+    "a plump body",
+    "a slender body",
+    "long pointed wings",
+    "short rounded wings",
+    "a long tail",
+    "a short tail",
+    "a crest",
+    "colorful plumage",
+    "dull brown feathers",
+    "white feathers",
+    "black feathers",
+    "gray feathers",
+    "yellow feathers",
+    "red feathers",
+    "blue feathers",
+    "spotted feathers",
+    "striped feathers",
+    "a small bird",
+    "a large bird",
+    "a songbird",
+    "a seabird",
+    "a wading bird",
+    "a diving bird",
+    "a swimming bird",
+    "a flying bird",
+    "a bird perched on a branch",
+    "a bird floating on water",
+    "a bird standing",
+    "a bird in flight",
+]
+CORE_VOCAB = {"birds": BIRD_PARTS, "people": PEOPLE}
+
+
+def core_directions(
+    v: torch.Tensor,
+    y: np.ndarray,
+    groups: np.ndarray,
+    err: np.ndarray,
+    min_errors: int = 20,
+) -> Tuple[torch.Tensor, List[str]]:
+    """Unit (D,) core directions: per (class × pseudo-group) cell with at least
+    `min_errors` errors and as many correct images, mean(correct) − mean(errors),
+    signed toward class 1 (binary targets); row 0 is their average (pooled), the
+    rest are the cells.  Returns (directions (1 + cells, D), tags)."""
+    dirs, tags = [], []
+    for k in np.unique(y):
+        for g in np.unique(groups):
+            m = (y == k) & (groups == g)
+            ne, nc = int((m & err).sum()), int((m & ~err).sum())
+            if ne < min_errors or nc < min_errors:
+                continue
+            sign = 1.0 if k == 1 else -1.0
+            dirs.append(sign * (v[m & ~err].mean(0) - v[m & err].mean(0)))
+            tags.append(f"class {int(k)} x pseudo-group {int(g)} ({ne} errors / {ne + nc})")
+    if not dirs:
+        raise ValueError(f"no (class x pseudo-group) cell with >= {min_errors} errors")
+    d = F.normalize(torch.stack(dirs).float(), dim=-1)
+    pooled = F.normalize(d.mean(0, keepdim=True), dim=-1)
+    return torch.cat([pooled, d]), ["pooled"] + tags
+
+
+def load_core_dirs(path: str) -> torch.Tensor:
+    """Accepted core directions (r, D) from a discover_core.py file."""
+    with open(path) as f:
+        entries = json.load(f)["directions"]
+    dirs = [e["vector"] for e in entries if e.get("accept")]
+    if not dirs:
+        raise ValueError(f"no accepted core directions in {path}")
+    return torch.tensor(dirs, dtype=torch.float32)

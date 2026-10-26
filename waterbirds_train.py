@@ -57,7 +57,7 @@ from clip_debias.config import (
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
-from clip_debias.discovery import load_prompt_file
+from clip_debias.discovery import load_core_dirs, load_prompt_file
 from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
@@ -338,6 +338,20 @@ def parse_args():
         "Adds an '_xp-<file stem>' suffix.",
     )
     parser.add_argument(
+        "--core_dirs",
+        default=None,
+        help="JSON file from discover_core.py: its accepted core directions are "
+        "promoted (a head on E(x) predicts their whitened scores, residual to the "
+        "concept subspace).  Needs --lambda_promote > 0.",
+    )
+    parser.add_argument(
+        "--lambda_promote",
+        type=float,
+        default=0.0,
+        help="Weight of the core-promotion loss for runs with a debiasing term. "
+        "Adds a '_core_lpro<v>' suffix.",
+    )
+    parser.add_argument(
         "--prompts",
         default="words",
         choices=list(PROMPT_SETS) + ["none"],
@@ -419,13 +433,16 @@ def main():
     )
 
     # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
+    if bool(args.core_dirs) != (args.lambda_promote > 0):
+        raise SystemExit("--core_dirs and --lambda_promote > 0 go together")
     need_eraser = (
         args.eraser == "leace"
         or args.align == "cka"
         or args.repulse != "orth"
         or args.group_reweight == "propensity"
+        or args.lambda_promote > 0
     )
-    eraser = train_weights = cutoffs = None
+    eraser = core_eraser = train_weights = cutoffs = None
     if need_eraser or args.group_reweight != "none" or args.zs_cutoff != "zero":
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
@@ -440,6 +457,12 @@ def main():
                 c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
                 fit_w = group_weights(y_tr, c_fit)
             eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
+            if args.core_dirs:
+                core = load_core_dirs(args.core_dirs)
+                core_eraser = fit_leace_eraser(
+                    v_tr, torch.cat([subspace.float().cpu(), core]), weights=fit_w
+                )
+                print(f"  {len(core)} core direction(s) from {args.core_dirs}")
             print(
                 f"  fitted whitened eraser on {len(v_tr):,} train embeddings "
                 f"({args.eraser_fit})"
@@ -525,6 +548,9 @@ def main():
             if args.lambda_repulse is not None and cfg.lambda_repulse > 0:
                 cfg.lambda_repulse = args.lambda_repulse
                 cfg.run_name += f"_lrep{args.lambda_repulse:g}"
+            if args.lambda_promote > 0 and run_name != "erm":
+                cfg.core_dirs, cfg.lambda_promote = args.core_dirs, args.lambda_promote
+                cfg.run_name += f"_core_lpro{args.lambda_promote:g}"
             if args.group_reweight != "none":
                 cfg = use_group_reweighting(cfg, args.group_reweight)
 
@@ -540,6 +566,7 @@ def main():
                 subspace=None if is_erm else subspace,
                 eraser=None if is_erm else eraser,
                 val_pseudo_concepts=val_pseudo,
+                core_eraser=None if is_erm else core_eraser,
             )
             fit_loader = (
                 weighted_loader(train_loader, train_weights, seed=seed)

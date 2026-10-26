@@ -116,13 +116,18 @@ class Trainer:
         subspace: torch.Tensor | None = None,
         eraser: Eraser | None = None,
         val_pseudo_concepts: torch.Tensor | None = None,
+        core_eraser: Eraser | None = None,
     ):
         self.model = model
         self.cfg = cfg
         self.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
         self._device_type = self.device.type
 
-        self._erm_mode = cfg.lambda_align == 0.0 and cfg.lambda_repulse == 0.0
+        self._erm_mode = (
+            cfg.lambda_align == 0.0
+            and cfg.lambda_repulse == 0.0
+            and cfg.lambda_promote == 0.0
+        )
         if not self._erm_mode and (oracle is None or subspace is None):
             raise ValueError(
                 "oracle and subspace are required when lambda_align or "
@@ -163,8 +168,24 @@ class Trainer:
         self.backbone_criterion = BackboneLoss(cfg)
         self.proj_criterion = ProjHeadLoss()
 
+        # Core promotion: joint whitened fit of [concept subspace; core
+        # directions]; the trailing block are the core scores, and a linear
+        # head on E(x) (trained with the backbone, not saved) reads them out.
+        self.core_eraser = self.core_head = None
+        backbone_params = list(model.backbone.parameters())
+        if cfg.lambda_promote > 0:
+            if core_eraser is None or self.subspace is None:
+                raise ValueError("lambda_promote > 0 needs core_eraser and subspace")
+            self.core_eraser = core_eraser.to(self.device)
+            self._core_offset = self.subspace.shape[0]
+            r_core = core_eraser.R.shape[0] - self._core_offset
+            embed_dim = next(
+                m for m in model.proj_head.modules() if isinstance(m, nn.Linear)
+            ).in_features
+            self.core_head = nn.Linear(embed_dim, r_core).to(self.device)
+            backbone_params += list(self.core_head.parameters())
         self.optimizer_backbone = AdamW(
-            model.backbone.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+            backbone_params, lr=cfg.lr, weight_decay=cfg.weight_decay
         )
         self.optimizer_proj = AdamW(
             model.proj_head.parameters(), lr=cfg.lr_proj, weight_decay=cfg.weight_decay
@@ -397,6 +418,15 @@ class Trainer:
             return (v_i.float() - self.eraser.mu) @ self.subspace.float().T
         return whitened_concept_scores(v_i.float(), self.eraser)
 
+    def _core_terms(self, v_i: torch.Tensor | None, embed: torch.Tensor) -> Dict:
+        if self.core_head is None or v_i is None:
+            return {}
+        scores = whitened_concept_scores(v_i.float(), self.core_eraser)
+        return dict(
+            core_pred=self.core_head(embed.float()),
+            core_scores=scores[:, self._core_offset :],
+        )
+
     # ── Single training step ──────────────────────────────────────────────────
 
     def _train_step(self, images: torch.Tensor, labels: torch.Tensor):
@@ -436,6 +466,7 @@ class Trainer:
                 subspace=self.subspace,
                 embed=out["embed"],
                 concept_scores=self._concept_scores(v_i),
+                **self._core_terms(v_i, out["embed"]),
             )
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
@@ -506,7 +537,7 @@ class Trainer:
             if self._erm_mode
             else (
                 f"debias  subspace_k={k}  λ_align={self.cfg.lambda_align}"
-                f"  λ_repulse={self.cfg.lambda_repulse}"
+                f"  λ_repulse={self.cfg.lambda_repulse}  λ_promote={self.cfg.lambda_promote}"
                 f"  lr={self.cfg.lr}  lr_proj={self.cfg.lr_proj}"
             )
         )
@@ -525,6 +556,7 @@ class Trainer:
                 "loss_task",
                 "loss_align",
                 "loss_repulse",
+                "loss_promote",
                 "loss_backbone",
                 "lambda_task",
                 "lambda_align",

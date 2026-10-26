@@ -114,6 +114,24 @@ def decorrelation_loss(
         return corr.pow(2).mean(0).sum()
 
 
+def promotion_loss(
+    pred: torch.Tensor, scores: torch.Tensor, eps: float = 1e-6
+) -> torch.Tensor:
+    """
+    Promote core concepts: mean_k (1 − corr(pred_k, scores_k)^2) over the batch.
+
+    pred   : (B, r) linear read-out of E(x) (a head trained with the backbone)
+    scores : (B, r) whitened core-concept scores (no gradient), residual to the
+             prompted concepts, so E(x) is pushed to encode what the core
+             directions carry beyond the bias.  Sign-free, scale-free.
+    """
+    with torch.autocast(pred.device.type, enabled=False):
+        p = pred.float() - pred.float().mean(0)
+        z = scores.float() - scores.float().mean(0)
+        corr = (p * z).sum(0) / (p.norm(dim=0) * z.norm(dim=0) + eps)
+        return (1.0 - corr.pow(2)).mean()
+
+
 def cka_alignment_loss(embed: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """
     1 − linear CKA between backbone features E(x) (B, d) and a target
@@ -164,6 +182,7 @@ class BackboneLoss(nn.Module):
         self.whitened_repulse = cfg.repulse in ("whitened", "whitened_cond", "raw")
         self.conditional_repulse = cfg.repulse == "whitened_cond"
         self.cka_align = cfg.align == "cka"
+        self.lambda_promote = cfg.lambda_promote
 
     def forward(
         self,
@@ -176,6 +195,8 @@ class BackboneLoss(nn.Module):
         v_t_hat: torch.Tensor | None = None,  # (D,) — auto-converted to (1, D)
         embed: torch.Tensor | None = None,  # (B, d) E(x), for repulse="whitened"
         concept_scores: torch.Tensor | None = None,  # (B, r) whitened CLIP scores
+        core_pred: torch.Tensor | None = None,  # (B, r_core) head read-out of E(x)
+        core_scores: torch.Tensor | None = None,  # (B, r_core) whitened core scores
     ):
         l_task = task_loss(logits, labels)
 
@@ -206,16 +227,23 @@ class BackboneLoss(nn.Module):
         else:
             l_repulse = logits.new_zeros(())
 
+        if self.lambda_promote > 0 and core_pred is not None:
+            l_promote = promotion_loss(core_pred, core_scores)
+        else:
+            l_promote = logits.new_zeros(())
+
         total = (
             self.lambda_task * l_task
             + self.lambda_align * l_align
             + self.lambda_repulse * l_repulse
+            + self.lambda_promote * l_promote
         )
 
         info = {
             "loss_task": l_task.item(),
             "loss_align": l_align.item(),
             "loss_repulse": l_repulse.item(),
+            "loss_promote": l_promote.item(),
             "loss_backbone": total.item(),
         }
         return total, info
