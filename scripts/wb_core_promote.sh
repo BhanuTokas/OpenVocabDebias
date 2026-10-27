@@ -51,10 +51,10 @@ PROMPTS=${PROMPTS:-results/discovery/wb_erm_seed42.json}
 STEM=$(basename "$PROMPTS" .json)
 STAGE1=${STAGE1:-./checkpoints_waterbirds/confirmed_${STEM}}
 
-SEEDS=(42 123 456)
-LAMBDAS=(1 3 10)
-SEED=${SEEDS[$((SLURM_ARRAY_TASK_ID % 3))]}
-LAM=${LAMBDAS[$((SLURM_ARRAY_TASK_ID / 3))]}
+read -ra SEEDS <<< "${SEEDS:-42 123 456}"   # override with matching --array=0-(seeds x lambdas - 1)
+read -ra LAMBDAS <<< "${LAMBDAS:-1 3 10}"
+SEED=${SEEDS[$((SLURM_ARRAY_TASK_ID % ${#SEEDS[@]}))]}
+LAM=${LAMBDAS[$((SLURM_ARRAY_TASK_ID / ${#SEEDS[@]}))]}
 WORKERS=${SLURM_CPUS_PER_TASK:-8}
 CKPT_DIR=./checkpoints_waterbirds/core_promote_${STEM}/${ARM}
 RESULTS_DIR=./results_waterbirds/core_promote_${STEM}/${ARM}/lpro${LAM}/seed_${SEED}

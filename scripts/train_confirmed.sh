@@ -49,7 +49,7 @@ if ! grep -q '"accept": true' "$PROMPTS"; then
     exit 1
 fi
 
-SEEDS=(42 123 456)
+read -ra SEEDS <<< "${SEEDS:-42 123 456}"   # override, e.g. SEEDS="789 1011" with --array=0-1
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 WORKERS=${SLURM_CPUS_PER_TASK:-8}
 STEM=$(basename "$PROMPTS" .json)
