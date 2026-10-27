@@ -197,8 +197,9 @@ class BackboneLoss(nn.Module):
         concept_scores: torch.Tensor | None = None,  # (B, r) whitened CLIP scores
         core_pred: torch.Tensor | None = None,  # (B, r_core) head read-out of E(x)
         core_scores: torch.Tensor | None = None,  # (B, r_core) whitened core scores
+        task_term: torch.Tensor | None = None,  # replaces CE (GroupDRO, BAM stage 1)
     ):
-        l_task = task_loss(logits, labels)
+        l_task = task_loss(logits, labels) if task_term is None else task_term
 
         if self.lambda_align > 0 and v_i_perp is not None:
             l_align = (

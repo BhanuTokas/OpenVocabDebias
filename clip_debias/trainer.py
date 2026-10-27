@@ -52,6 +52,7 @@ from .clip_oracle import (
     whitened_concept_scores,
 )
 from .evaluate import extract_features, train_linear_probe, worst_group_accuracy
+from .baselines import GroupDROLoss
 from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
 
@@ -106,6 +107,13 @@ class Trainer:
                (unshuffled) val loader.  If given, the epoch with the best
                pseudo-group val WGA is saved as best_pseudo_wga.pt — a
                label-free counterpart of best_wga.pt.
+    core_eraser : joint whitened fit of [subspace; core directions] for
+               cfg.lambda_promote > 0
+    train_groups : (N_train,) group ids aligned with the train dataset, for
+               cfg.group_dro != "none" (baselines.dro_groups)
+    n_train  : train set size, for the BAM auxiliaries (cfg.bam_aux > 0)
+    With GroupDRO or BAM the train loader must yield sample indices as its
+    third element (baselines.indexed_loader).
     """
 
     def __init__(
@@ -117,6 +125,8 @@ class Trainer:
         eraser: Eraser | None = None,
         val_pseudo_concepts: torch.Tensor | None = None,
         core_eraser: Eraser | None = None,
+        train_groups: torch.Tensor | None = None,
+        n_train: int | None = None,
     ):
         self.model = model
         self.cfg = cfg
@@ -184,8 +194,25 @@ class Trainer:
             ).in_features
             self.core_head = nn.Linear(embed_dim, r_core).to(self.device)
             backbone_params += list(self.core_head.parameters())
+        # Baselines needing per-example state: GroupDRO group ids, BAM auxiliaries
+        self.dro = self.train_groups = self.bam_b = None
+        param_groups = [{"params": backbone_params}]
+        if cfg.group_dro != "none":
+            if train_groups is None:
+                raise ValueError("group_dro needs train_groups")
+            self.train_groups = train_groups.long().to(self.device)
+            self.dro = GroupDROLoss(int(self.train_groups.max()) + 1, cfg.dro_eta).to(
+                self.device
+            )
+        if cfg.bam_aux > 0:
+            if n_train is None:
+                raise ValueError("bam_aux needs n_train")
+            n_cls = model.backbone.fc.out_features
+            self.bam_b = nn.Parameter(torch.zeros(n_train, n_cls, device=self.device))
+            param_groups.append({"params": [self.bam_b], "weight_decay": 0.0})
+        self._needs_index = self.dro is not None or self.bam_b is not None
         self.optimizer_backbone = AdamW(
-            backbone_params, lr=cfg.lr, weight_decay=cfg.weight_decay
+            param_groups, lr=cfg.lr, weight_decay=cfg.weight_decay
         )
         self.optimizer_proj = AdamW(
             model.proj_head.parameters(), lr=cfg.lr_proj, weight_decay=cfg.weight_decay
@@ -429,7 +456,23 @@ class Trainer:
 
     # ── Single training step ──────────────────────────────────────────────────
 
-    def _train_step(self, images: torch.Tensor, labels: torch.Tensor):
+    def _task_term(self, logits, labels, idx) -> torch.Tensor | None:
+        """GroupDRO or BAM stage-1 loss in place of the plain CE (else None)."""
+        if idx is None:
+            return None
+        idx = idx.to(self.device)
+        if self.dro is not None:
+            return self.dro(logits, labels, self.train_groups[idx])
+        return F.cross_entropy(
+            logits.float() + self.cfg.bam_aux * self.bam_b[idx], labels
+        )
+
+    def _train_step(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+        idx: torch.Tensor | None = None,
+    ):
         images = images.to(self.device)
         labels = labels.to(self.device)
 
@@ -467,6 +510,7 @@ class Trainer:
                 embed=out["embed"],
                 concept_scores=self._concept_scores(v_i),
                 **self._core_terms(v_i, out["embed"]),
+                task_term=self._task_term(out["logits"], labels, idx),
             )
         self.scaler_backbone.scale(loss_backbone).backward()
         info.update(backbone_info)
@@ -576,8 +620,10 @@ class Trainer:
             running = {k: 0.0 for k in log_keys}
             n = 0
 
-            for step, (images, labels, _) in enumerate(train_loader, 1):
-                info, acc = self._train_step(images, labels)
+            for step, (images, labels, extra) in enumerate(train_loader, 1):
+                info, acc = self._train_step(
+                    images, labels, extra if self._needs_index else None
+                )
                 for k in log_keys:
                     if k == "acc":
                         running["acc"] += acc

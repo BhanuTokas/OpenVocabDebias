@@ -58,6 +58,13 @@ from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
 from clip_debias.discovery import load_core_dirs, load_prompt_file, prompt_directions
+from clip_debias.baselines import (
+    add_baseline_args,
+    apply_baseline_args,
+    dro_groups,
+    error_set_weights,
+    indexed_loader,
+)
 from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
@@ -367,6 +374,7 @@ def parse_args():
         "('none': only the --extra_prompts pairs). "
         "Anything but 'words' adds a '_p<set>' suffix to every run.",
     )
+    add_baseline_args(parser)
     return parser.parse_args()
 
 
@@ -456,7 +464,15 @@ def main():
         or args.lambda_promote > 0
     )
     eraser = core_eraser = train_weights = cutoffs = None
-    if need_eraser or args.group_reweight != "none" or args.zs_cutoff != "zero":
+    c_hat = train_groups = None
+    if args.error_set and args.group_reweight != "none":
+        raise SystemExit("--error_set replaces --group_reweight; pass only one")
+    if (
+        need_eraser
+        or args.group_reweight != "none"
+        or args.zs_cutoff != "zero"
+        or args.group_dro != "none"
+    ):
         print("\nEmbedding the train split with CLIP …")
         v_tr, y_tr, c_tr = embed_dataset(
             oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
@@ -484,18 +500,22 @@ def main():
                 f"  fitted whitened eraser on {len(v_tr):,} train embeddings "
                 f"({args.eraser_fit})"
             )
-        if args.group_reweight == "pseudo":
+        if args.group_reweight == "pseudo" or args.group_dro == "pseudo":
             c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
             )
+        if args.group_reweight == "pseudo":
             train_weights = group_weights(y_tr, c_hat)
         elif args.group_reweight == "oracle":
             train_weights = group_weights(y_tr, c_tr)
         elif args.group_reweight == "propensity":
             z_tr = whitened_concept_scores(v_tr, eraser)
             train_weights = propensity_weights(y_tr, z_tr)
+        train_groups = dro_groups(args, y_tr, c_tr, c_hat)
+    if args.error_set:
+        train_weights = error_set_weights(args.error_set, args.upweight)
 
     val_pseudo = zeroshot_concept_codes(oracle, prompt_pairs, v_va, cutoffs)
     print(
@@ -572,6 +592,7 @@ def main():
                 ) + f"_lpro{args.lambda_promote:g}"
             if args.group_reweight != "none":
                 cfg = use_group_reweighting(cfg, args.group_reweight)
+            cfg = apply_baseline_args(cfg, args)
 
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -586,11 +607,18 @@ def main():
                 eraser=None if is_erm else eraser,
                 val_pseudo_concepts=val_pseudo,
                 core_eraser=None if is_erm else core_eraser,
+                train_groups=train_groups,
+                n_train=len(train_loader.dataset),
+            )
+            base_loader = (
+                indexed_loader(train_loader)
+                if cfg.group_dro != "none" or cfg.bam_aux > 0
+                else train_loader
             )
             fit_loader = (
-                weighted_loader(train_loader, train_weights, seed=seed)
+                weighted_loader(base_loader, train_weights, seed=seed)
                 if train_weights is not None
-                else train_loader
+                else base_loader
             )
             best_ckpt = trainer.fit(fit_loader, val_loader)
 

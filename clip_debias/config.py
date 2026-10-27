@@ -311,6 +311,15 @@ class DebiasingConfig:
     core_dirs: str = ""
     lambda_promote: float = 0.0
 
+    # Baselines (clip_debias/baselines.py): GroupDRO over "pseudo" / "oracle"
+    # groups with step size dro_eta; JTT/BAM stage 2 upsamples the train errors
+    # in error_set by upweight; BAM stage 1 adds bam_aux · b_i to the logits.
+    group_dro: str = "none"
+    dro_eta: float = 0.01
+    error_set: str = ""
+    upweight: float = 1.0
+    bam_aux: float = 0.0
+
     # Group-balanced resampling of the train set over (target × concept) groups:
     #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
     #   | "oracle" (true concept labels — reference upper bound only)
