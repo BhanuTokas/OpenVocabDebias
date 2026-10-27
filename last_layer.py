@@ -57,7 +57,9 @@ AFR_GRID = {
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("run_dir", help="ERM run directory (config.json + checkpoint)")
-    p.add_argument("--ckpt", default="best.pt", help="feature extractor (default: val-acc)")
+    p.add_argument(
+        "--ckpt", default="best.pt", help="feature extractor (default: val-acc)"
+    )
     p.add_argument("--method", choices=["dfr", "afr"], required=True)
     p.add_argument("--groups", choices=["true", "pseudo"], required=True)
     p.add_argument("--seed", type=int, default=0, help="val halves and subsampling")
@@ -114,7 +116,9 @@ def afr(xv, yv, gv, A, B, xt, W0, b0, grid, device):
     # normalised step of 1e-2 oscillates and the WGA collapses within 100 steps.
     s = float(np.linalg.norm(xv[A], axis=1).mean())
     xa, ya = torch.tensor(xv[A] / s, device=device), torch.tensor(yv[A], device=device)
-    xb, xtt = torch.tensor(xv[B] / s, device=device), torch.tensor(xt / s, device=device)
+    xb, xtt = torch.tensor(xv[B] / s, device=device), torch.tensor(
+        xt / s, device=device
+    )
     W0, b0 = (W0 * s).to(device), b0.to(device)
     with torch.no_grad():
         p = F.softmax(xa @ W0.T + b0, 1).gather(1, ya[:, None]).squeeze(1)
@@ -140,7 +144,11 @@ def afr(xv, yv, gv, A, B, xt, W0, b0, grid, device):
                     if score > best[0]:
                         with torch.no_grad():
                             tpred = (xtt @ W.T + b).argmax(1).cpu().numpy()
-                        best = (score, dict(gamma=round(float(gamma), 3), lam=lam, step=step), tpred)
+                        best = (
+                            score,
+                            dict(gamma=round(float(gamma), 3), lam=lam, step=step),
+                            tpred,
+                        )
         print(f"    gamma={gamma:.2f}  best val-B WGA so far {best[0]:.3f}  {best[1]}")
     params = dict(best[1], val_select_wga=round(best[0], 4))
     return best[2], params
@@ -148,17 +156,29 @@ def afr(xv, yv, gv, A, B, xt, W0, b0, grid, device):
 
 def main():
     args = parse_args()
-    cfg, dataset, _ = load_run_cfg(args.run_dir, SimpleNamespace(**vars(args), dataset="auto"))
+    cfg, dataset, _ = load_run_cfg(
+        args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
+    )
     _, val_l, test_l = (
-        build_waterbirds_dataloaders(cfg) if dataset == "waterbirds" else build_dataloaders(cfg)
+        build_waterbirds_dataloaders(cfg)
+        if dataset == "waterbirds"
+        else build_dataloaders(cfg)
     )
     model = build_model(cfg, num_classes=2)
     state = torch.load(os.path.join(args.run_dir, args.ckpt), map_location=cfg.device)
     model.load_state_dict(state.get("model_state", state))
     fv = extract_features(model, val_l, cfg.device, use_amp=cfg.amp)
     ft = extract_features(model, test_l, cfg.device, use_amp=cfg.amp)
-    xv, yv, cv = fv["embeds"].astype(np.float32), fv["targets"].astype(int), fv["concepts"].astype(int)
-    xt, yt, ct = ft["embeds"].astype(np.float32), ft["targets"].astype(int), ft["concepts"].astype(int)
+    xv, yv, cv = (
+        fv["embeds"].astype(np.float32),
+        fv["targets"].astype(int),
+        fv["concepts"].astype(int),
+    )
+    xt, yt, ct = (
+        ft["embeds"].astype(np.float32),
+        ft["targets"].astype(int),
+        ft["concepts"].astype(int),
+    )
     n_attr = 1 + len(cfg.extra_concept_attrs)
     n_codes = 1 << n_attr
 
@@ -167,24 +187,40 @@ def main():
     else:
         oracle = CLIPOracle(cfg.clip_model, device=cfg.device)
         v, _, _ = embed_dataset(oracle, val_l.dataset, num_workers=args.num_workers)
-        cv_sel = zeroshot_concept_codes(
-            oracle, prompted_pairs(cfg, dataset), v, cfg.zs_cutoffs or None
-        ).numpy().astype(int)
-        print(f"  pseudo-group accuracy on val (reported only): {(cv_sel == cv).mean():.3f}")
+        cv_sel = (
+            zeroshot_concept_codes(
+                oracle, prompted_pairs(cfg, dataset), v, cfg.zs_cutoffs or None
+            )
+            .numpy()
+            .astype(int)
+        )
+        print(
+            f"  pseudo-group accuracy on val (reported only): {(cv_sel == cv).mean():.3f}"
+        )
     gv = yv * n_codes + cv_sel
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(len(yv))
     A, B = np.sort(perm[: len(yv) // 2]), np.sort(perm[len(yv) // 2 :])
-    print(f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}  {args.method.upper()} "
-          f"({args.groups} groups)  val {len(yv)} / test {len(yt)}")
+    print(
+        f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}  {args.method.upper()} "
+        f"({args.groups} groups)  val {len(yv)} / test {len(yt)}"
+    )
     if args.method == "dfr":
         pred, params = dfr(xv, yv, gv, A, B, xt, rng)
     else:
         fc = model.backbone.fc
         pred, params = afr(
-            xv, yv, gv, A, B, xt, fc.weight.detach().float(), fc.bias.detach().float(),
-            AFR_GRID[dataset], cfg.device if torch.cuda.is_available() else "cpu",
+            xv,
+            yv,
+            gv,
+            A,
+            B,
+            xt,
+            fc.weight.detach().float(),
+            fc.bias.detach().float(),
+            AFR_GRID[dataset],
+            cfg.device if torch.cuda.is_available() else "cpu",
         )
 
     gt = yt * n_codes + ct
@@ -198,7 +234,10 @@ def main():
         ckpt=args.ckpt,
         task_test_acc=round(float((pred == yt).mean()), 4),
         worst_group_acc=round(worst, 4),
-        **{f"wga_attr{b}": round(wga(pred, yt, yt * 2 + ((ct >> b) & 1))[0], 4) for b in range(n_attr)},
+        **{
+            f"wga_attr{b}": round(wga(pred, yt, yt * 2 + ((ct >> b) & 1))[0], 4)
+            for b in range(n_attr)
+        },
         params=params,
         group_accs={k: round(v, 4) for k, v in accs.items()},
     )

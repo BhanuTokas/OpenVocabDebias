@@ -46,8 +46,11 @@ def val_score(method_dir):
     """Mean over seeds of the best val pseudo-WGA over epochs."""
     s = []
     for f in glob.glob(f"{method_dir}/seed_*/val_history.json"):
-        v = [e["val_pseudo_wga"] for e in json.load(open(f))["epochs"].values()
-             if e.get("val_pseudo_wga") is not None]
+        v = [
+            e["val_pseudo_wga"]
+            for e in json.load(open(f))["epochs"].values()
+            if e.get("val_pseudo_wga") is not None
+        ]
         if v:
             s.append(max(v))
     return (st.mean(s), len(s)) if s else (float("-inf"), 0)
@@ -56,7 +59,11 @@ def val_score(method_dir):
 def eval_rows(method_dir):
     out = []
     for f in glob.glob(f"{method_dir}/seed_*/eval_summary.csv"):
-        out += [r for r in csv.DictReader(open(f)) if r["checkpoint"] == "best_pseudo_wga.pt"]
+        out += [
+            r
+            for r in csv.DictReader(open(f))
+            if r["checkpoint"] == "best_pseudo_wga.pt"
+        ]
     return out
 
 
@@ -79,10 +86,17 @@ def main():
 
     for tag_dir in sorted(glob.glob(f"{base}/*_resnet*")):
         tag = os.path.basename(tag_dir)
-        methods = {os.path.basename(d): d for d in glob.glob(f"{tag_dir}/*")
-                   if os.path.isdir(d) and os.path.basename(d) not in ("error_sets", "last_layer")}
+        methods = {
+            os.path.basename(d): d
+            for d in glob.glob(f"{tag_dir}/*")
+            if os.path.isdir(d)
+            and os.path.basename(d) not in ("error_sets", "last_layer")
+        }
         chosen = {}
-        for fam, pat in (("jtt", r"jtt_up([\d.]+)$"), ("bam2", r"bam2_aux([\d.]+)_up([\d.]+)$")):
+        for fam, pat in (
+            ("jtt", r"jtt_up([\d.]+)$"),
+            ("bam2", r"bam2_aux([\d.]+)_up([\d.]+)$"),
+        ):
             cands = {n: val_score(d) for n, d in methods.items() if re.match(pat, n)}
             if cands:
                 best = max(cands, key=lambda n: cands[n][0])
@@ -103,8 +117,10 @@ def main():
                 line(f"{LABEL[key]} [{name}]", eval_rows(methods[name]), keys)
                 if a.grid:
                     for n, (score, k) in sorted(chosen[key][1].items()):
-                        print(f"        grid {n:<22} val pseudo-WGA {score:.4f} (n={k})"
-                              f"   test WGA {mean_sd([float(r['worst_group_acc']) for r in eval_rows(methods[n])])}")
+                        print(
+                            f"        grid {n:<22} val pseudo-WGA {score:.4f} (n={k})"
+                            f"   test WGA {mean_sd([float(r['worst_group_acc']) for r in eval_rows(methods[n])])}"
+                        )
             else:
                 for n in sorted(methods):
                     if n == key or n.startswith(key + "_l"):
@@ -121,8 +137,10 @@ def main():
         for f in sorted(glob.glob(f"{base}/*_clip_probe.csv")):
             print(f"\n== {os.path.basename(f)[:-4]}  (frozen CLIP, seed-independent)")
             for r in csv.DictReader(open(f)):
-                print(f"    {r['run_name']:<44} worst_group_acc: {float(r['worst_group_acc']):.3f}"
-                      f"   task_test_acc: {float(r['task_test_acc']):.3f}   {r['params']}")
+                print(
+                    f"    {r['run_name']:<44} worst_group_acc: {float(r['worst_group_acc']):.3f}"
+                    f"   task_test_acc: {float(r['task_test_acc']):.3f}   {r['params']}"
+                )
 
 
 if __name__ == "__main__":
