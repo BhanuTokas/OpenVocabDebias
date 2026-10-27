@@ -345,7 +345,8 @@ def prompt_directions(
     directions; scored residual to the concept subspace, the raw text margin's
     habitat/background component is removed."""
     dirs = [
-        oracle.encode_text(pos).float().mean(0) - oracle.encode_text(neg).float().mean(0)
+        oracle.encode_text(pos).float().mean(0)
+        - oracle.encode_text(neg).float().mean(0)
         for pos, neg in pairs
     ]
     return F.normalize(torch.stack(dirs).cpu(), dim=-1)
