@@ -61,8 +61,11 @@ def val_score(method_dir):
     """Mean over seeds of the best val pseudo-WGA over epochs."""
     s = []
     for f in glob.glob(f"{method_dir}/seed_*/val_history.json"):
-        v = [e["val_pseudo_wga"] for e in json.load(open(f))["epochs"].values()
-             if e.get("val_pseudo_wga") is not None]
+        v = [
+            e["val_pseudo_wga"]
+            for e in json.load(open(f))["epochs"].values()
+            if e.get("val_pseudo_wga") is not None
+        ]
         if v:
             s.append(max(v))
     return (st.mean(s), len(s)) if s else (float("-inf"), 0)
@@ -71,7 +74,11 @@ def val_score(method_dir):
 def eval_rows(method_dir):
     out = []
     for f in glob.glob(f"{method_dir}/seed_*/eval_summary.csv"):
-        out += [r for r in csv.DictReader(open(f)) if r["checkpoint"] == "best_pseudo_wga.pt"]
+        out += [
+            r
+            for r in csv.DictReader(open(f))
+            if r["checkpoint"] == "best_pseudo_wga.pt"
+        ]
     return out
 
 
@@ -94,9 +101,13 @@ def main():
 
     for tag_dir in sorted(glob.glob(f"{base}/*_resnet*")):
         tag = os.path.basename(tag_dir)
-        methods = {os.path.basename(d): d for d in glob.glob(f"{tag_dir}/*")
-                   if os.path.isdir(d) and os.path.basename(d) != "error_sets"
-                   and not os.path.basename(d).startswith("last_layer")}
+        methods = {
+            os.path.basename(d): d
+            for d in glob.glob(f"{tag_dir}/*")
+            if os.path.isdir(d)
+            and os.path.basename(d) != "error_sets"
+            and not os.path.basename(d).startswith("last_layer")
+        }
         chosen = {}
         for fam, pat in (("jtt", JTT), ("bam2", BAM)):
             cands = {n: val_score(d) for n, d in methods.items() if re.match(pat, n)}
@@ -114,21 +125,32 @@ def main():
             continue
 
         print(f"\n== {tag}  (test, best_pseudo_wga.pt; mean ± sd over seeds)")
-        for key in ("erm", "grw", "dro_pseudo", "dro_pseudo_wd", "dro_oracle", "dro_oracle_wd",
-                    "jtt", "bam2", "ours"):
+        for key in (
+            "erm",
+            "grw",
+            "dro_pseudo",
+            "dro_pseudo_wd",
+            "dro_oracle",
+            "dro_oracle_wd",
+            "jtt",
+            "bam2",
+            "ours",
+        ):
             if key in chosen:
                 name = chosen[key][0]
                 line(f"{LABEL[key]} [{name}]", eval_rows(methods[name]), keys)
                 if a.grid:
                     for n, (score, k) in sorted(chosen[key][1].items()):
-                        print(f"        grid {n:<22} val pseudo-WGA {score:.4f} (n={k})"
-                              f"   test WGA {mean_sd([float(r['worst_group_acc']) for r in eval_rows(methods[n])])}")
+                        print(
+                            f"        grid {n:<22} val pseudo-WGA {score:.4f} (n={k})"
+                            f"   test WGA {mean_sd([float(r['worst_group_acc']) for r in eval_rows(methods[n])])}"
+                        )
             else:
                 for n in sorted(methods):
                     if re.fullmatch(EXACT[key], n):
                         line(f"{LABEL[key]} [{n}]", eval_rows(methods[n]), keys)
         for ll_dir in sorted(glob.glob(f"{tag_dir}/last_layer*")):
-            src = os.path.basename(ll_dir)[len("last_layer_"):] or "erm"
+            src = os.path.basename(ll_dir)[len("last_layer_") :] or "erm"
             ll = defaultdict(list)
             for f in glob.glob(f"{ll_dir}/seed_*.csv"):
                 for r in csv.DictReader(open(f)):
@@ -141,8 +163,10 @@ def main():
         for f in sorted(glob.glob(f"{base}/*_clip_probe.csv")):
             print(f"\n== {os.path.basename(f)[:-4]}  (frozen CLIP, seed-independent)")
             for r in csv.DictReader(open(f)):
-                print(f"    {r['run_name']:<44} worst_group_acc: {float(r['worst_group_acc']):.3f}"
-                      f"   task_test_acc: {float(r['task_test_acc']):.3f}   {r['params']}")
+                print(
+                    f"    {r['run_name']:<44} worst_group_acc: {float(r['worst_group_acc']):.3f}"
+                    f"   task_test_acc: {float(r['task_test_acc']):.3f}   {r['params']}"
+                )
 
 
 if __name__ == "__main__":

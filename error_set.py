@@ -33,7 +33,9 @@ from eval_checkpoints import load_run_cfg
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("run_dir", help="run directory containing config.json and the checkpoint")
+    p.add_argument(
+        "run_dir", help="run directory containing config.json and the checkpoint"
+    )
     p.add_argument("--ckpt", default="epoch_01.pt")
     p.add_argument("--out", required=True)
     p.add_argument("--celeba_root", default=None)
@@ -45,7 +47,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    cfg, dataset, _ = load_run_cfg(args.run_dir, SimpleNamespace(**vars(args), dataset="auto"))
+    cfg, dataset, _ = load_run_cfg(
+        args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
+    )
     if dataset == "waterbirds":
         ds = WaterbirdsDebiasDataset("train", transform=get_eval_transform())
     else:
@@ -65,12 +69,18 @@ def main():
     y, c = f["targets"].astype(int), f["concepts"].astype(int)
     err = f["preds"] != f["targets"]
 
-    print(f"{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: {err.sum():,} / {len(err):,} "
-          f"train errors ({err.mean():.3f})")
-    print("  (analysis) error rate per true (y, concept) group: " + "  ".join(
-        f"({a},{b}) {err[(y == a) & (c == b)].mean():.2f} n={((y == a) & (c == b)).sum()}"
-        for a in np.unique(y) for b in np.unique(c)
-    ))
+    print(
+        f"{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: {err.sum():,} / {len(err):,} "
+        f"train errors ({err.mean():.3f})"
+    )
+    print(
+        "  (analysis) error rate per true (y, concept) group: "
+        + "  ".join(
+            f"({a},{b}) {err[(y == a) & (c == b)].mean():.2f} n={((y == a) & (c == b)).sum()}"
+            for a in np.unique(y)
+            for b in np.unique(c)
+        )
+    )
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     np.savez(args.out, err=err, y=y, c=c)
     print(f"  written to {args.out}")
