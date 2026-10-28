@@ -44,6 +44,7 @@ import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
+from torch.utils.data import DataLoader
 
 from .clip_oracle import (
     CLIPOracle,
@@ -52,7 +53,7 @@ from .clip_oracle import (
     whitened_concept_scores,
 )
 from .evaluate import extract_features, train_linear_probe, worst_group_accuracy
-from .baselines import GroupDROLoss
+from .baselines import GroupDROLoss, IndexedDataset
 from .losses import BackboneLoss, ProjHeadLoss
 from .models import DebiasedClassifier
 
@@ -209,7 +210,13 @@ class Trainer:
                 raise ValueError("bam_aux needs n_train")
             n_cls = model.backbone.fc.out_features
             self.bam_b = nn.Parameter(torch.zeros(n_train, n_cls, device=self.device))
-            param_groups.append({"params": [self.bam_b], "weight_decay": 0.0})
+            # Plain SGD for the auxiliaries, as in BAM: under Adam the per-example
+            # step is ~lr whatever λ is, so λ has no effect (identical runs for
+            # λ = 5 and 50).  lr × batch size undoes the 1/B of the batch mean, so
+            # one visit moves the logit λ·b_i by about lr·λ²·(p_i − y_i).
+            self.bam_opt = torch.optim.SGD(
+                [self.bam_b], lr=cfg.lr * cfg.batch_size, momentum=0.9
+            )
         self._needs_index = self.dro is not None or self.bam_b is not None
         self.optimizer_backbone = AdamW(
             param_groups, lr=cfg.lr, weight_decay=cfg.weight_decay
@@ -478,6 +485,8 @@ class Trainer:
 
         self.optimizer_proj.zero_grad(set_to_none=True)
         self.optimizer_backbone.zero_grad(set_to_none=True)
+        if self.bam_b is not None:
+            self.bam_opt.zero_grad(set_to_none=True)
 
         v_i = v_i_perp = None
         if not self._erm_mode:
@@ -539,6 +548,10 @@ class Trainer:
 
         self.scaler_backbone.unscale_(self.optimizer_backbone)
         nn.utils.clip_grad_norm_(self.model.backbone.parameters(), max_norm=1.0)
+        if self.bam_b is not None and self.bam_b.grad is not None:
+            self.bam_b.grad /= self.scaler_backbone.get_scale()  # AMP loss scale
+            if torch.isfinite(self.bam_b.grad).all():
+                self.bam_opt.step()
         self.scaler_backbone.step(self.optimizer_backbone)
         self.scaler_backbone.update()
 
@@ -572,6 +585,17 @@ class Trainer:
     def fit(self, train_loader, val_loader) -> str:
         self._setup_schedulers(len(train_loader))
         self.model.to(self.device).train()
+        # The per-epoch concept probe needs (image, label, concept) batches; an
+        # IndexedDataset (GroupDRO / BAM) yields sample indices instead, which
+        # would make the probe a 160k-class regression on CelebA.
+        probe_loader = train_loader
+        if isinstance(train_loader.dataset, IndexedDataset):
+            probe_loader = DataLoader(
+                train_loader.dataset.base,
+                batch_size=train_loader.batch_size,
+                shuffle=False,
+                num_workers=train_loader.num_workers,
+            )
         first_batch = next(iter(train_loader))
         self._calibrate_lambdas(first_batch)
 
@@ -646,7 +670,7 @@ class Trainer:
             print(f"    val   — " + _fmt(val))
 
             train_feats = extract_features(
-                self.model, train_loader, str(self.device), use_amp=self.cfg.amp
+                self.model, probe_loader, str(self.device), use_amp=self.cfg.amp
             )
             val_feats = extract_features(
                 self.model, val_loader, str(self.device), use_amp=self.cfg.amp

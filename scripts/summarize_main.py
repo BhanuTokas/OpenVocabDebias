@@ -29,12 +29,27 @@ LABEL = {
     "ours": "ours (decorrelation + reweighting)",
     "dro_pseudo": "GroupDRO, CLIP pseudo-groups (B2T-style)",
     "dro_oracle": "GroupDRO, true groups (reference)",
+    "dro_pseudo_wd": "GroupDRO, CLIP pseudo-groups, strong weight decay",
+    "dro_oracle_wd": "GroupDRO, true groups, strong weight decay (reference)",
     "jtt": "JTT",
     "bam2": "BAM",
     "dfr_pseudo": "DFR, CLIP pseudo-groups",
     "dfr_true": "DFR, true groups (reference)",
     "afr_pseudo": "AFR, selected on CLIP pseudo-groups",
     "afr_true": "AFR, selected on true groups (reference)",
+}
+
+
+JTT = r"jtt_lr([\d.e-]+)_up([\d.]+)$"
+BAM = r"bam2_aux([\d.]+)_up([\d.]+)$"
+EXACT = {  # run directories shown as one row each (no grid selection)
+    "erm": r"erm",
+    "grw": r"grw",
+    "ours": r"ours_l[\d.]+",
+    "dro_pseudo": r"dro_pseudo",
+    "dro_oracle": r"dro_oracle",
+    "dro_pseudo_wd": r"dro_pseudo_wd[\d.]+",
+    "dro_oracle_wd": r"dro_oracle_wd[\d.]+",
 }
 
 
@@ -80,24 +95,27 @@ def main():
     for tag_dir in sorted(glob.glob(f"{base}/*_resnet*")):
         tag = os.path.basename(tag_dir)
         methods = {os.path.basename(d): d for d in glob.glob(f"{tag_dir}/*")
-                   if os.path.isdir(d) and os.path.basename(d) not in ("error_sets", "last_layer")}
+                   if os.path.isdir(d) and os.path.basename(d) != "error_sets"
+                   and not os.path.basename(d).startswith("last_layer")}
         chosen = {}
-        for fam, pat in (("jtt", r"jtt_up([\d.]+)$"), ("bam2", r"bam2_aux([\d.]+)_up([\d.]+)$")):
+        for fam, pat in (("jtt", JTT), ("bam2", BAM)):
             cands = {n: val_score(d) for n, d in methods.items() if re.match(pat, n)}
             if cands:
                 best = max(cands, key=lambda n: cands[n][0])
                 chosen[fam] = (best, cands)
         if a.select:
             for fam, (best, _) in chosen.items():
-                m = re.match(r"jtt_up([\d.]+)$|bam2_aux([\d.]+)_up([\d.]+)$", best)
                 if fam == "jtt":
-                    print(f"JTT_UP_{tag}={m.group(1)}")
+                    lr, up = re.match(JTT, best).groups()
+                    print(f"JTT_LR_{tag}={lr} JTT_UP_{tag}={up}")
                 else:
-                    print(f"BAM_AUX_{tag}={m.group(2)} BAM_UP_{tag}={m.group(3)}")
+                    aux, up = re.match(BAM, best).groups()
+                    print(f"BAM_AUX_{tag}={aux} BAM_UP_{tag}={up}")
             continue
 
         print(f"\n== {tag}  (test, best_pseudo_wga.pt; mean ± sd over seeds)")
-        for key in ("erm", "grw", "dro_pseudo", "dro_oracle", "jtt", "bam2", "ours"):
+        for key in ("erm", "grw", "dro_pseudo", "dro_pseudo_wd", "dro_oracle", "dro_oracle_wd",
+                    "jtt", "bam2", "ours"):
             if key in chosen:
                 name = chosen[key][0]
                 line(f"{LABEL[key]} [{name}]", eval_rows(methods[name]), keys)
@@ -107,15 +125,17 @@ def main():
                               f"   test WGA {mean_sd([float(r['worst_group_acc']) for r in eval_rows(methods[n])])}")
             else:
                 for n in sorted(methods):
-                    if n == key or n.startswith(key + "_l"):
+                    if re.fullmatch(EXACT[key], n):
                         line(f"{LABEL[key]} [{n}]", eval_rows(methods[n]), keys)
-        ll = defaultdict(list)
-        for f in glob.glob(f"{tag_dir}/last_layer/seed_*.csv"):
-            for r in csv.DictReader(open(f)):
-                ll[r["run_name"]].append(r)
-        for n in ("dfr_pseudo", "afr_pseudo", "dfr_true", "afr_true"):
-            if ll.get(n):
-                line(LABEL[n], ll[n], keys)
+        for ll_dir in sorted(glob.glob(f"{tag_dir}/last_layer*")):
+            src = os.path.basename(ll_dir)[len("last_layer_"):] or "erm"
+            ll = defaultdict(list)
+            for f in glob.glob(f"{ll_dir}/seed_*.csv"):
+                for r in csv.DictReader(open(f)):
+                    ll[r["run_name"]].append(r)
+            for n in ("dfr_pseudo", "afr_pseudo", "dfr_true", "afr_true"):
+                if ll.get(n):
+                    line(f"{LABEL[n]} on {src}", ll[n], keys)
 
     if not a.select:
         for f in sorted(glob.glob(f"{base}/*_clip_probe.csv")):

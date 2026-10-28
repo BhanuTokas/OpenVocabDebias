@@ -11,9 +11,11 @@
 
 # Main tables, post-hoc baselines (submitted by scripts/submit_main.sh after the
 # ERM runs):
-#   METHOD=last_layer  DFR and AFR on the ERM run of each seed (array over
-#                      SEEDS), with true groups (reference) and CLIP
-#                      pseudo-groups (label-free) -> results_<ROOT>/<TAG>/last_layer/
+#   METHOD=last_layer  DFR and AFR on the SRC run of each seed (array over
+#                      SEEDS; SRC default erm at best.pt, other methods at
+#                      best_pseudo_wga.pt), with true groups (reference) and CLIP
+#                      pseudo-groups (label-free)
+#                      -> results_<ROOT>/<TAG>/last_layer/ (erm) or last_layer_<SRC>/
 #   METHOD=probe       frozen-CLIP zero-shot / probe / balanced probe (one task,
 #                      seed-independent)                -> results_<ROOT>/<DATASET>_clip_probe.csv
 # DATASET, BACKBONE, SEEDS, ROOT, CELEBA_ROOT as in scripts/main_run.sh.
@@ -55,12 +57,17 @@ fi
 : "${BACKBONE:?}"
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 TAG=${DATASET}_${BACKBONE}
-RUN_DIR=$(ls -d "./checkpoints_${ROOT}/${TAG}/erm"/*/seed_"$SEED"/*/ | tail -1)
-OUT=./results_${ROOT}/${TAG}/last_layer/seed_${SEED}.csv
+SRC=${SRC:-erm}
+RUN_DIR=$(ls -d "./checkpoints_${ROOT}/${TAG}/${SRC}"/*/seed_"$SEED"/*/ | tail -1)
+if [ "$SRC" = erm ]; then
+    CKPT=best.pt; OUT=./results_${ROOT}/${TAG}/last_layer/seed_${SEED}.csv
+else
+    CKPT=best_pseudo_wga.pt; OUT=./results_${ROOT}/${TAG}/last_layer_${SRC}/seed_${SEED}.csv
+fi
 rm -f "$OUT"
 for m in dfr afr; do
     for g in true pseudo; do
-        $RUN last_layer.py "$RUN_DIR" --method "$m" --groups "$g" --seed "$SEED" \
+        $RUN last_layer.py "$RUN_DIR" --ckpt "$CKPT" --method "$m" --groups "$g" --seed "$SEED" \
             "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$OUT"
     done
 done

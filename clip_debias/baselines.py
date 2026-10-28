@@ -111,6 +111,13 @@ def add_baseline_args(parser) -> None:
     )
     g.add_argument("--upweight", type=float, default=50.0)
     g.add_argument(
+        "--weight_decay",
+        type=float,
+        default=None,
+        help="AdamW weight decay (default: the config's 1e-4). Adds '_wd<v>'; "
+        "strong values (e.g. 1.0 on Waterbirds) are the usual GroupDRO setting.",
+    )
+    g.add_argument(
         "--bam_aux",
         type=float,
         default=0.0,
@@ -132,6 +139,9 @@ def apply_baseline_args(cfg, args):
     if args.bam_aux > 0:
         cfg.bam_aux = args.bam_aux
         cfg.run_name += f"_bam{args.bam_aux:g}"
+    if args.weight_decay is not None:
+        cfg.weight_decay = args.weight_decay
+        cfg.run_name += f"_wd{args.weight_decay:g}"
     return cfg
 
 

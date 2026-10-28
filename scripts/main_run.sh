@@ -23,11 +23,17 @@
 #             ours        whitened decorrelation λ (LAMBDA) + pseudo-group reweighting
 #             dro_pseudo  GroupDRO on CLIP pseudo-groups (B2T / ViG-Bias mitigation)
 #             dro_oracle  GroupDRO on true groups (reference)
+#             dro_pseudo_wd / dro_oracle_wd  the same with weight decay WD
+#                         (GroupDRO's usual strong-regularisation setting)
 #             bam1        BAM stage 1, auxiliary coefficient AUX (2 epochs)
-#             jtt         JTT stage 2: errors of the ERM run's epoch_01.pt, xUP
+#             jtt1        JTT stage 1: ERM at learning rate LR1 (2 epochs), so the
+#                         epoch-1 model underfits (at the default 1e-4 a pretrained
+#                         ResNet nearly memorises train in one epoch and its errors
+#                         are not the minority groups)
+#             jtt         JTT stage 2: errors of the jtt1 LR1 run's epoch_01.pt, xUP
 #             bam2        BAM stage 2: errors of the bam1 AUX run's epoch_01.pt, xUP
 #   LAMBDA    ours: repulse weight (default 10)
-#   AUX, UP   bam1 / bam2 / jtt hyperparameters
+#   AUX, UP, LR1  bam1 / bam2 / jtt1 / jtt hyperparameters;  WD for *_wd
 #   ROOT      output namespace (default main): checkpoints_<ROOT>/, results_<ROOT>/
 
 module purge
@@ -87,10 +93,14 @@ case "$METHOD" in
                       --group_reweight pseudo) ;;
     dro_pseudo) NAME=dro_pseudo; ARGS=(--runs erm --group_dro pseudo) ;;
     dro_oracle) NAME=dro_oracle; ARGS=(--runs erm --group_dro oracle) ;;
+    dro_pseudo_wd | dro_oracle_wd)
+                G=${METHOD#dro_}; G=${G%_wd}
+                NAME=dro_${G}_wd${WD:?}; ARGS=(--runs erm --group_dro "$G" --weight_decay "$WD") ;;
+    jtt1)       NAME=jtt1_lr${LR1:?}; ARGS=(--runs erm --lr "$LR1" --epochs 2) ;;
     bam1)       NAME=bam1_aux${AUX:?}; ARGS=(--runs erm --bam_aux "$AUX" --epochs 2) ;;
-    jtt)        NAME=jtt_up${UP:?}
-                ES=$ES_DIR/jtt_seed${SEED}_up${UP}.npz
-                error_set erm "$ES"
+    jtt)        NAME=jtt_lr${LR1:?}_up${UP:?}
+                ES=$ES_DIR/jtt_lr${LR1}_seed${SEED}_up${UP}.npz
+                error_set "jtt1_lr${LR1}" "$ES"
                 ARGS=(--runs erm --error_set "$ES" --upweight "$UP") ;;
     bam2)       NAME=bam2_aux${AUX:?}_up${UP:?}
                 ES=$ES_DIR/bam_aux${AUX}_seed${SEED}_up${UP}.npz
@@ -125,7 +135,7 @@ json.dump({"run_dir": d, "epochs": hist}, open(out, "w"), indent=1)
 print(f"val history of {len(hist)} epochs -> {out}")
 EOF
     for f in "$d"epoch_*.pt; do
-        if [ "$(basename "$f")" = epoch_01.pt ] && { [ "$METHOD" = erm ] || [ "$METHOD" = bam1 ]; }; then
+        if [ "$(basename "$f")" = epoch_01.pt ] && { [ "$METHOD" = jtt1 ] || [ "$METHOD" = bam1 ]; }; then
             continue
         fi
         rm -f "$f"
