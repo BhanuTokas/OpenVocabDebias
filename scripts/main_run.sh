@@ -25,13 +25,16 @@
 #             dro_oracle  GroupDRO on true groups (reference)
 #             dro_pseudo_wd / dro_oracle_wd  the same with weight decay WD
 #                         (GroupDRO's usual strong-regularisation setting)
-#             bam1        BAM stage 1, auxiliary coefficient AUX (2 epochs)
+#             bam1        BAM stage 1, auxiliary coefficient AUX, BAM_T epochs
+#                         (default 3); its error set is taken at the last epoch,
+#                         because each auxiliary b_i is still 0 when its example
+#                         is first seen, so epoch 1 of BAM is exactly ERM
 #             jtt1        JTT stage 1: ERM at learning rate LR1 (2 epochs), so the
 #                         epoch-1 model underfits (at the default 1e-4 a pretrained
 #                         ResNet nearly memorises train in one epoch and its errors
 #                         are not the minority groups)
 #             jtt         JTT stage 2: errors of the jtt1 LR1 run's epoch_01.pt, xUP
-#             bam2        BAM stage 2: errors of the bam1 AUX run's epoch_01.pt, xUP
+#             bam2        BAM stage 2: errors of the bam1 AUX run's epoch_<BAM_T>.pt, xUP
 #   LAMBDA    ours: repulse weight (default 10)
 #   AUX, UP, LR1  bam1 / bam2 / jtt1 / jtt hyperparameters;  WD for *_wd
 #   ROOT      output namespace (default main): checkpoints_<ROOT>/, results_<ROOT>/
@@ -73,15 +76,17 @@ RUN="uv run --locked python"
 stage1_dir() {  # $1 = method dir of the stage-1 run
     ls -d "$CKPT_BASE/$1"/*/seed_"$SEED"/*/ 2>/dev/null | tail -1
 }
-error_set() {   # $1 = stage-1 method dir, $2 = output npz
+error_set() {   # $1 = stage-1 method dir, $2 = stage-1 checkpoint, $3 = output npz
     local d
     d=$(stage1_dir "$1")
-    if [ -z "$d" ] || [ ! -f "$d/epoch_01.pt" ]; then
-        echo "No stage-1 epoch_01.pt under $CKPT_BASE/$1 for seed $SEED" >&2
+    if [ -z "$d" ] || [ ! -f "$d/$2" ]; then
+        echo "No stage-1 $2 under $CKPT_BASE/$1 for seed $SEED" >&2
         exit 1
     fi
-    $RUN error_set.py "$d" --ckpt epoch_01.pt "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$2"
+    $RUN error_set.py "$d" --ckpt "$2" "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$3"
 }
+BAM_T=${BAM_T:-3}
+BAM_CKPT=$(printf "epoch_%02d.pt" "$BAM_T")
 
 ES_DIR=$RES_BASE/error_sets
 mkdir -p "$ES_DIR"
@@ -97,14 +102,14 @@ case "$METHOD" in
                 G=${METHOD#dro_}; G=${G%_wd}
                 NAME=dro_${G}_wd${WD:?}; ARGS=(--runs erm --group_dro "$G" --weight_decay "$WD") ;;
     jtt1)       NAME=jtt1_lr${LR1:?}; ARGS=(--runs erm --lr "$LR1" --epochs 2) ;;
-    bam1)       NAME=bam1_aux${AUX:?}; ARGS=(--runs erm --bam_aux "$AUX" --epochs 2) ;;
+    bam1)       NAME=bam1_aux${AUX:?}_T${BAM_T}; ARGS=(--runs erm --bam_aux "$AUX" --epochs "$BAM_T") ;;
     jtt)        NAME=jtt_lr${LR1:?}_up${UP:?}
                 ES=$ES_DIR/jtt_lr${LR1}_seed${SEED}_up${UP}.npz
-                error_set "jtt1_lr${LR1}" "$ES"
+                error_set "jtt1_lr${LR1}" epoch_01.pt "$ES"
                 ARGS=(--runs erm --error_set "$ES" --upweight "$UP") ;;
-    bam2)       NAME=bam2_aux${AUX:?}_up${UP:?}
-                ES=$ES_DIR/bam_aux${AUX}_seed${SEED}_up${UP}.npz
-                error_set "bam1_aux${AUX}" "$ES"
+    bam2)       NAME=bam2_aux${AUX:?}_T${BAM_T}_up${UP:?}
+                ES=$ES_DIR/bam_aux${AUX}_T${BAM_T}_seed${SEED}_up${UP}.npz
+                error_set "bam1_aux${AUX}_T${BAM_T}" "$BAM_CKPT" "$ES"
                 ARGS=(--runs erm --error_set "$ES" --upweight "$UP") ;;
     *)          echo "unknown METHOD=$METHOD" >&2; exit 1 ;;
 esac
@@ -121,7 +126,8 @@ fi
 
 # Keep the per-epoch val metrics (label-free hyperparameter selection reads
 # val_pseudo_wga), then drop the epoch checkpoints (~1.4 GB per R18 run, ~3 GB
-# per R50 run with optimizer state); erm and bam1 keep epoch_01.pt for stage 2.
+# per R50 run with optimizer state); jtt1 keeps epoch_01.pt and bam1 its last
+# epoch (BAM_T) for stage 2.
 for d in "$CKPT_DIR"/*/seed_"$SEED"/*/; do
     mkdir -p "$RESULTS_DIR"
     $RUN - "$d" "$RESULTS_DIR/val_history.json" <<'EOF'
@@ -135,7 +141,9 @@ json.dump({"run_dir": d, "epochs": hist}, open(out, "w"), indent=1)
 print(f"val history of {len(hist)} epochs -> {out}")
 EOF
     for f in "$d"epoch_*.pt; do
-        if [ "$(basename "$f")" = epoch_01.pt ] && { [ "$METHOD" = jtt1 ] || [ "$METHOD" = bam1 ]; }; then
+        b=$(basename "$f")
+        if { [ "$METHOD" = jtt1 ] && [ "$b" = epoch_01.pt ]; } ||
+           { [ "$METHOD" = bam1 ] && [ "$b" = "$BAM_CKPT" ]; }; then
             continue
         fi
         rm -f "$f"

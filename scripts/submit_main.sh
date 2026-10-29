@@ -8,6 +8,9 @@
 #                 BAM (SGD auxiliaries), GroupDRO with strong weight decay, and
 #                 DFR / AFR on the ours and grw models.  Move the old BAM
 #                 results aside first (same names), see the note printed below.
+#   PHASE=bam     seeds 42 123 456: the BAM grid only, stage 1 now BAM_T epochs
+#                 (default 3) with the error set at its last epoch (new names
+#                 bam1_aux<A>_T<T> / bam2_aux<A>_T<T>_up<U>, no collision)
 #   PHASE=extend  seeds 789 1011: every method at the chosen JTT / BAM values
 #                 (JTT_LR_<tag>, JTT_UP_<tag>, BAM_AUX_<tag>, BAM_UP_<tag>, e.g.
 #                 JTT_UP_wb_resnet18=50) picked label-free from the grid:
@@ -22,7 +25,7 @@ if [ ! -f scripts/main_run.sh ]; then
     exit 1
 fi
 mkdir -p logs
-PHASE=${PHASE:?set PHASE=grid, fix or extend}
+PHASE=${PHASE:?set PHASE=grid, fix, bam or extend}
 DATASETS=${DATASETS:-wb celeba}
 BACKBONES=${BACKBONES:-resnet18 resnet50}
 ROOT=${ROOT:-main}
@@ -79,6 +82,15 @@ for DATASET in $DATASETS; do
         C=(DATASET=$DATASET BACKBONE=$BACKBONE CELEBA_ROOT=${CELEBA_ROOT:-})
         echo "== $TAG  $PHASE  seeds: $SEEDS"
         J_OURS=- ; J_GRW=-
+        if [ "$PHASE" = bam ]; then
+            for AUX in $BAM_AUXS; do
+                J_B1=$(sub "$T_ERM" - "${C[@]}" METHOD=bam1 AUX=$AUX -- scripts/main_run.sh)
+                for UP in $BAM_UPS; do
+                    sub "$T_ERM" "$J_B1" "${C[@]}" METHOD=bam2 AUX=$AUX UP=$UP -- scripts/main_run.sh >/dev/null
+                done
+            done
+            continue
+        fi
         if [ "$PHASE" != fix ]; then
             J_ERM=$(sub "$T_ERM" - "${C[@]}" METHOD=erm -- scripts/main_run.sh)
             J_GRW=$(sub "$T_ERM" - "${C[@]}" METHOD=grw -- scripts/main_run.sh)
