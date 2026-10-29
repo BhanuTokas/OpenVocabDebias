@@ -45,22 +45,27 @@ def parse_args():
     return p.parse_args()
 
 
+def train_eval_dataset(cfg, dataset):
+    """The run's train split with the eval transform (no augmentation), in the
+    train loader's index order."""
+    if dataset == "waterbirds":
+        return WaterbirdsDebiasDataset("train", transform=get_eval_transform())
+    return CelebADebias(
+        cfg.celeba_root,
+        "train",
+        cfg.target_attr,
+        cfg.concept_attr,
+        extra_concept_attrs=cfg.extra_concept_attrs,
+        transform=get_eval_transform(),
+    )
+
+
 def main():
     args = parse_args()
     cfg, dataset, _ = load_run_cfg(
         args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
     )
-    if dataset == "waterbirds":
-        ds = WaterbirdsDebiasDataset("train", transform=get_eval_transform())
-    else:
-        ds = CelebADebias(
-            cfg.celeba_root,
-            "train",
-            cfg.target_attr,
-            cfg.concept_attr,
-            extra_concept_attrs=cfg.extra_concept_attrs,
-            transform=get_eval_transform(),
-        )
+    ds = train_eval_dataset(cfg, dataset)
     model = build_model(cfg, num_classes=2)
     state = torch.load(os.path.join(args.run_dir, args.ckpt), map_location=cfg.device)
     model.load_state_dict(state.get("model_state", state))

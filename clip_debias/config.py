@@ -319,6 +319,12 @@ class DebiasingConfig:
     error_set: str = ""
     upweight: float = 1.0
     bam_aux: float = 0.0
+    # Cross-fitting for discovery: with n_folds > 0 the run trains on every
+    # fold of a fold_seed permutation of train except `fold`, which
+    # discover_biases.py then predicts (held-out errors without the val split).
+    n_folds: int = 0
+    fold: int = 0
+    fold_seed: int = 0
 
     # Group-balanced resampling of the train set over (target × concept) groups:
     #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)

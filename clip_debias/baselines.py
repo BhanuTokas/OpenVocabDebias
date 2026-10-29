@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 
 
 class IndexedDataset(Dataset):
@@ -81,6 +81,31 @@ class GroupDROLoss(nn.Module):
         return (self.q * group_loss).sum()
 
 
+def fold_indices(n: int, n_folds: int, fold: int, seed: int) -> np.ndarray:
+    """Train indices held out in `fold` of a seeded random K-fold split of n."""
+    perm = np.random.default_rng(seed).permutation(n)
+    return np.sort(np.array_split(perm, n_folds)[fold])
+
+
+def fold_loader(loader: DataLoader, n_folds: int, fold: int, seed: int) -> DataLoader:
+    """Same batching as `loader` (shuffled), over the train examples outside
+    `fold` (fold_indices)."""
+    held = fold_indices(len(loader.dataset), n_folds, fold, seed)
+    keep = np.setdiff1d(np.arange(len(loader.dataset)), held)
+    print(
+        f"  fold {fold}/{n_folds} (split seed {seed}): training on {len(keep):,}, "
+        f"holding out {len(held):,} train examples"
+    )
+    return DataLoader(
+        Subset(loader.dataset, keep.tolist()),
+        batch_size=loader.batch_size,
+        shuffle=True,
+        num_workers=loader.num_workers,
+        pin_memory=loader.pin_memory,
+        persistent_workers=loader.num_workers > 0,
+    )
+
+
 def error_set_weights(path: str, upweight: float) -> torch.Tensor:
     """Sampling weights for JTT / BAM stage 2: `upweight` for the train examples in
     the error set (error_set.py file), 1 elsewhere; aligned with train indices."""
@@ -124,6 +149,15 @@ def add_baseline_args(parser) -> None:
         help="BAM stage 1: coefficient λ of the per-example auxiliary logits. "
         "Adds '_bam<λ>'.",
     )
+    g.add_argument(
+        "--n_folds",
+        type=int,
+        default=0,
+        help="cross-fitting for discover_biases.py: train on all folds of a "
+        "--fold_seed K-fold split of train except --fold. Adds '_f<k>of<K>s<seed>'.",
+    )
+    g.add_argument("--fold", type=int, default=0)
+    g.add_argument("--fold_seed", type=int, default=0)
 
 
 def apply_baseline_args(cfg, args):
@@ -142,6 +176,11 @@ def apply_baseline_args(cfg, args):
     if args.weight_decay is not None:
         cfg.weight_decay = args.weight_decay
         cfg.run_name += f"_wd{args.weight_decay:g}"
+    if args.n_folds > 0:
+        if not 0 <= args.fold < args.n_folds:
+            raise SystemExit(f"--fold must be in [0, {args.n_folds})")
+        cfg.n_folds, cfg.fold, cfg.fold_seed = args.n_folds, args.fold, args.fold_seed
+        cfg.run_name += f"_f{args.fold}of{args.n_folds}s{args.fold_seed}"
     return cfg
 
 
