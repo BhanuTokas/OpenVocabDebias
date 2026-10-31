@@ -1,0 +1,12 @@
+{
+  "note": "Discovered without the val split: class-0 (landbird) error direction of the main ERM ResNet-18 run (seed 42) at epoch_01.pt, errors on the train split (discover_biases.py --split train --prompted none; results_cf/wb_resnet18/erm_ep1_train.json). |corr| with true place 0.76 on train; |cos| 0.88 with the 5-fold cross-fit direction. Review: dropped 'a young adult' and 'a photo of indoors'; class-1 direction rejected (lipstick / makeup / close-up at one end).",
+  "proposals": [
+    {
+      "name": "discovered_class0",
+      "pos": ["a garden", "a forest", "a jungle"],
+      "neg": ["the ocean", "the sea", "a harbor", "a beach", "a shore"],
+      "accept": true,
+      "class": 0
+    }
+  ]
+}
