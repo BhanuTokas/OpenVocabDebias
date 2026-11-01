@@ -319,6 +319,7 @@ class DebiasingConfig:
     error_set: str = ""
     upweight: float = 1.0
     bam_aux: float = 0.0
+    bam_lr: float = 1e-4  # SGD step of the auxiliaries (x batch size), not tied to lr
     # Cross-fitting for discovery: with n_folds > 0 the run trains on every
     # fold of a fold_seed permutation of train except `fold`, which
     # discover_biases.py then predicts (held-out errors without the val split).

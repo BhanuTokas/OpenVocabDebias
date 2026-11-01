@@ -150,6 +150,14 @@ def add_baseline_args(parser) -> None:
         "Adds '_bam<λ>'.",
     )
     g.add_argument(
+        "--bam_lr",
+        type=float,
+        default=1e-4,
+        help="BAM stage 1: SGD learning rate of the auxiliaries, independent of "
+        "--lr so an underfit stage 1 (small --lr) keeps the same auxiliary step. "
+        "Adds '_blr<v>' when not 1e-4.",
+    )
+    g.add_argument(
         "--n_folds",
         type=int,
         default=0,
@@ -171,8 +179,10 @@ def apply_baseline_args(cfg, args):
         cfg.error_set, cfg.upweight = args.error_set, args.upweight
         cfg.run_name += f"_up{args.upweight:g}-{Path(args.error_set).stem}"
     if args.bam_aux > 0:
-        cfg.bam_aux = args.bam_aux
+        cfg.bam_aux, cfg.bam_lr = args.bam_aux, args.bam_lr
         cfg.run_name += f"_bam{args.bam_aux:g}"
+        if args.bam_lr != 1e-4:
+            cfg.run_name += f"_blr{args.bam_lr:g}"
     if args.weight_decay is not None:
         cfg.weight_decay = args.weight_decay
         cfg.run_name += f"_wd{args.weight_decay:g}"

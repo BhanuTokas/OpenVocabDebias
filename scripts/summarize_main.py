@@ -3,7 +3,7 @@
 summarize_main.py — Main tables from scripts/submit_main.sh outputs.
 
 Every trained method is read at best_pseudo_wga.pt (label-free selection).
-Grid families (jtt_lr*_up*, bam2_aux*_T*_up*) are reduced to one configuration per
+Grid families (jtt_lr*_up*, bam2_aux*_T*_lr*_up*) are reduced to one configuration per
 (dataset, backbone) by the mean over seeds of the best val pseudo-group WGA
 (val_history.json): no test or bias labels are used for any choice.  DFR / AFR
 rows come from last_layer.py, the frozen-CLIP rows from clip_probe.py.
@@ -41,7 +41,8 @@ LABEL = {
 
 
 JTT = r"jtt_lr([\d.e-]+)_up([\d.]+)$"
-BAM = r"bam2_aux([\d.]+)_T\d+_up([\d.]+)$"  # older runs without _T used epoch 1 (= ERM)
+# older BAM runs: without _T epoch 1 (= ERM); without _lr stage 1 at lr 1e-4 (overfit)
+BAM = r"bam2_aux([\d.]+)_T\d+_lr[\d.e-]+_up([\d.]+)$"
 EXACT = {  # run directories shown as one row each (no grid selection)
     "erm": r"erm",
     "grw": r"grw",

@@ -213,9 +213,11 @@ class Trainer:
             # Plain SGD for the auxiliaries, as in BAM: under Adam the per-example
             # step is ~lr whatever λ is, so λ has no effect (identical runs for
             # λ = 5 and 50).  lr × batch size undoes the 1/B of the batch mean, so
-            # one visit moves the logit λ·b_i by about lr·λ²·(p_i − y_i).
+            # one visit moves the logit λ·b_i by about bam_lr·λ²·(p_i − y_i).
+            # bam_lr is separate from lr so an underfit stage 1 (small lr) does
+            # not also shrink the auxiliaries.
             self.bam_opt = torch.optim.SGD(
-                [self.bam_b], lr=cfg.lr * cfg.batch_size, momentum=0.9
+                [self.bam_b], lr=cfg.bam_lr * cfg.batch_size, momentum=0.9
             )
         self._needs_index = self.dro is not None or self.bam_b is not None
         self.optimizer_backbone = AdamW(
