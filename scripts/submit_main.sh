@@ -8,13 +8,16 @@
 #                 BAM (SGD auxiliaries), GroupDRO with strong weight decay, and
 #                 DFR / AFR on the ours and grw models.  Move the old BAM
 #                 results aside first (same names), see the note printed below.
-#   PHASE=bam     seeds 42 123 456: the BAM grid only, stage 1 now BAM_T epochs
-#                 (default 3) with the error set at its last epoch (new names
-#                 bam1_aux<A>_T<T> / bam2_aux<A>_T<T>_up<U>, no collision)
+#   PHASE=bam     seeds 42 123 456 (or SEEDS): the BAM grid only, stage 1 now
+#                 BAM_T epochs (default 3) with the error set at its last epoch
+#                 (new names bam1_aux<A>_T<T> / bam2_aux<A>_T<T>_up<U>, no
+#                 collision); BAM_AUX_<tag> / BAM_UP_<tag>, if set, replace the
+#                 grid, e.g. SEEDS="789 1011" for the BAM part of the extension
 #   PHASE=extend  seeds 789 1011: every method at the chosen JTT / BAM values
 #                 (JTT_LR_<tag>, JTT_UP_<tag>, BAM_AUX_<tag>, BAM_UP_<tag>, e.g.
 #                 JTT_UP_wb_resnet18=50) picked label-free from the grid:
 #                 eval "$(python scripts/summarize_main.py --select)"
+#                 BAM is skipped for a tag without BAM_AUX_<tag>
 #
 # DATASETS (default "wb celeba"), BACKBONES (default "resnet18 resnet50"),
 # CELEBA_ROOT (needed for celeba), ROOT (default main), DRY_RUN=1 to print only.
@@ -29,7 +32,7 @@ PHASE=${PHASE:?set PHASE=grid, fix, bam or extend}
 DATASETS=${DATASETS:-wb celeba}
 BACKBONES=${BACKBONES:-resnet18 resnet50}
 ROOT=${ROOT:-main}
-if [ "$PHASE" = extend ]; then SEEDS="789 1011"; else SEEDS="42 123 456"; fi
+if [ "$PHASE" = extend ]; then SEEDS="789 1011"; else SEEDS=${SEEDS:-42 123 456}; fi
 if [ "$PHASE" = fix ] && compgen -G "checkpoints_${ROOT}/*/bam*" >/dev/null; then
     echo "BAM (now with SGD auxiliaries) reuses the names bam1_aux* / bam2_aux*: move the" >&2
     echo "old runs aside first, keeping their paths:" >&2
@@ -76,8 +79,14 @@ for DATASET in $DATASETS; do
         if [ "$PHASE" = extend ]; then
             v=JTT_LR_$TAG; JTT_LRS=${!v:?set $v}
             v=JTT_UP_$TAG; JTT_UPS=${!v:?set $v}
-            v=BAM_AUX_$TAG; BAM_AUXS=${!v:?set $v}
+        fi
+        v=BAM_AUX_$TAG
+        if [ -n "${!v:-}" ]; then
+            BAM_AUXS=${!v}
             v=BAM_UP_$TAG; BAM_UPS=${!v:?set $v}
+        elif [ "$PHASE" = extend ]; then
+            echo "  no BAM_AUX_$TAG: skipping BAM" >&2
+            BAM_AUXS=""
         fi
         C=(DATASET=$DATASET BACKBONE=$BACKBONE CELEBA_ROOT=${CELEBA_ROOT:-})
         echo "== $TAG  $PHASE  seeds: $SEEDS"
