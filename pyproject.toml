@@ -25,3 +25,15 @@ dependencies = [
 # Scripts are run from the repo root and import clip_debias from there;
 # don't build/install the package (setup.py is kept for `pip install -e .`).
 package = false
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# scikit-learn >= 1.8 deprecates penalty="l1" (DFR); tests/ checks it still applies
+filterwarnings = [
+    "ignore:'penalty' was deprecated:FutureWarning",
+    "ignore:Inconsistent values:UserWarning",
+]
