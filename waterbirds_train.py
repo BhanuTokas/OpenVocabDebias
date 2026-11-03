@@ -647,6 +647,7 @@ def main():
                 "seed": seed,
                 "subspace_k": args.concept_subspace_k,
                 "run_dir": trainer.ckpt_dir,
+                "checkpoint": os.path.basename(best_ckpt),
                 **metrics,
             }
             all_results.append(row)

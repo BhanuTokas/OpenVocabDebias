@@ -752,4 +752,10 @@ class Trainer:
                 )
 
         print()
-        return os.path.join(self.ckpt_dir, "best_wga.pt")
+        # The model reported at the end of training is chosen without bias
+        # labels: pseudo-group val WGA when CLIP pseudo-groups are available,
+        # else val accuracy.  best_wga.pt (true val groups) is still saved as a
+        # reference, but is never the default.
+        if self._best_val_pseudo_wga >= 0:
+            return os.path.join(self.ckpt_dir, "best_pseudo_wga.pt")
+        return os.path.join(self.ckpt_dir, "best.pt")

@@ -3,7 +3,7 @@
 eval_checkpoints.py — Re-evaluate saved runs without re-training.
 
 For every run directory found under the given paths, evaluates each selected
-checkpoint (default: best.pt and best_wga.pt) on the test split and appends one
+checkpoint (default: all three below) on the test split and appends one
 row per (run, checkpoint) to a summary CSV.  Each row reports the concept probe
 on both E(x) and P(E(x)), task accuracy and worst-group accuracy.
 
