@@ -16,6 +16,9 @@
 #                      best_pseudo_wga.pt), with true groups (reference) and CLIP
 #                      pseudo-groups (label-free)
 #                      -> results_<ROOT>/<TAG>/last_layer/ (erm) or last_layer_<SRC>/
+#   METHOD=dfr_tr      DFR fitted on train (DFR^Tr_Tr; val only selects C), true
+#                      and pseudo groups, same SRC / outputs as last_layer
+#                      (seed_<S>_tr.csv next to seed_<S>.csv)
 #   METHOD=probe       frozen-CLIP zero-shot / probe / balanced probe (one task,
 #                      seed-independent)                -> results_<ROOT>/<DATASET>_clip_probe.csv
 # DATASET, BACKBONE, SEEDS, ROOT, CELEBA_ROOT as in scripts/main_run.sh.
@@ -63,6 +66,15 @@ if [ "$SRC" = erm ]; then
     CKPT=best.pt; OUT=./results_${ROOT}/${TAG}/last_layer/seed_${SEED}.csv
 else
     CKPT=best_pseudo_wga.pt; OUT=./results_${ROOT}/${TAG}/last_layer_${SRC}/seed_${SEED}.csv
+fi
+if [ "$METHOD" = dfr_tr ]; then
+    OUT=${OUT%.csv}_tr.csv
+    rm -f "$OUT"
+    for g in true pseudo; do
+        $RUN last_layer.py "$RUN_DIR" --ckpt "$CKPT" --method dfr --fit_on train --groups "$g" \
+            --seed "$SEED" "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$OUT"
+    done
+    exit 0
 fi
 rm -f "$OUT"
 for m in dfr afr; do

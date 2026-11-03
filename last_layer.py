@@ -6,6 +6,10 @@ last_layer.py — Last-layer retraining baselines on a trained (ERM) model.
        L1 logistic regression on group-balanced subsamples of the val split.
        C is tuned on val half A -> worst-group accuracy on half B; the final
        model averages 20 fits on balanced subsamples of the whole val split.
+       With --fit_on train (DFR^Tr_Tr): the subsamples come from the train split
+       (eval transform) instead, C is selected by WGA on the whole val split, and
+       val is used for nothing else -- the same use of val as checkpoint
+       selection, so comparable with methods that never train on val.
   afr  AFR (Qiu et al., ICML 2023): last layer initialised at the ERM one and
        retrained by full-batch gradient descent on
            sum_i mu_i CE_i + lambda ||phi - phi_ERM||^2,
@@ -16,7 +20,8 @@ last_layer.py — Last-layer retraining baselines on a trained (ERM) model.
        so val half A is the reweighting set (as DFR uses val), and (gamma,
        lambda, step) are selected on half B.
 
---groups decides which groups balance (DFR) and select (both) on val:
+--groups decides which groups balance (DFR, on the fit split) and select (both,
+on val):
   true    dataset concept labels (reference: uses bias annotations)
   pseudo  CLIP zero-shot codes of the run's concept prompts (label-free, the
           same pseudo-groups as best_pseudo_wga.pt)
@@ -25,6 +30,7 @@ Test metrics always use the true groups.  One CSV row per call (--out).
 Usage
 -----
     python last_layer.py <ERM run dir> --method dfr --groups pseudo --out ll.csv
+    python last_layer.py <ERM run dir> --method dfr --groups pseudo --fit_on train ...
 """
 
 import argparse
@@ -35,6 +41,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
@@ -44,6 +51,7 @@ from clip_debias.evaluate import extract_features
 from clip_debias.models import build_model
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
 from discover_biases import prompted_pairs
+from error_set import train_eval_dataset
 from eval_checkpoints import load_run_cfg
 
 DFR_C = [1.0, 0.7, 0.3, 0.1, 0.07, 0.03, 0.01]
@@ -62,6 +70,12 @@ def parse_args():
     )
     p.add_argument("--method", choices=["dfr", "afr"], required=True)
     p.add_argument("--groups", choices=["true", "pseudo"], required=True)
+    p.add_argument(
+        "--fit_on",
+        choices=["val", "train"],
+        default="val",
+        help="DFR: split the last layer is fitted on (train: val only selects C)",
+    )
     p.add_argument("--seed", type=int, default=0, help="val halves and subsampling")
     p.add_argument("--celeba_root", default=None)
     p.add_argument("--out", required=True)
@@ -106,6 +120,22 @@ def dfr(xv, yv, gv, A, B, xt, rng):
     sc = StandardScaler().fit(xv)
     w, b = fit_dfr(sc.transform(xv), yv, gv, best[1], 20, rng)
     pred = ((sc.transform(xt) @ w.T + b).ravel() > 0).astype(int)
+    return pred, dict(C=best[1], val_select_wga=round(best[0], 4))
+
+
+def dfr_train(xf, yf, gf, xv, yv, gv, xt, rng):
+    """DFR^Tr_Tr: fit on balanced subsamples of train, select C on all of val."""
+    sc = StandardScaler().fit(xf)
+    xf, xv, xt = sc.transform(xf), sc.transform(xv), sc.transform(xt)
+    best = (-1.0, None)
+    for C in DFR_C:
+        w, b = fit_dfr(xf, yf, gf, C, 5, rng)
+        score = wga(((xv @ w.T + b).ravel() > 0).astype(int), yv, gv)[0]
+        print(f"    C={C:<5} val WGA {score:.3f}")
+        if score > best[0]:
+            best = (score, C)
+    w, b = fit_dfr(xf, yf, gf, best[1], 20, rng)
+    pred = ((xt @ w.T + b).ravel() > 0).astype(int)
     return pred, dict(C=best[1], val_select_wga=round(best[0], 4))
 
 
@@ -156,6 +186,8 @@ def afr(xv, yv, gv, A, B, xt, W0, b0, grid, device):
 
 def main():
     args = parse_args()
+    if args.fit_on == "train" and args.method != "dfr":
+        raise SystemExit("--fit_on train is for --method dfr")
     cfg, dataset, _ = load_run_cfg(
         args.run_dir, SimpleNamespace(**vars(args), dataset="auto")
     )
@@ -181,13 +213,27 @@ def main():
     )
     n_attr = 1 + len(cfg.extra_concept_attrs)
     n_codes = 1 << n_attr
+    if args.fit_on == "train":
+        train_ds = train_eval_dataset(cfg, dataset)
+        train_l = DataLoader(
+            train_ds, batch_size=args.batch_size, num_workers=args.num_workers
+        )
+        ff = extract_features(model, train_l, cfg.device, use_amp=cfg.amp)
+        xf, yf, cf = (
+            ff["embeds"].astype(np.float32),
+            ff["targets"].astype(int),
+            ff["concepts"].astype(int),
+        )
 
-    if args.groups == "true":
-        cv_sel = cv
-    else:
+    oracle = None
+    if args.groups == "pseudo":
         oracle = CLIPOracle(cfg.clip_model, device=cfg.device)
-        v, _, _ = embed_dataset(oracle, val_l.dataset, num_workers=args.num_workers)
-        cv_sel = (
+
+    def groups(y, c, ds, split):
+        if oracle is None:
+            return y * n_codes + c
+        v, _, _ = embed_dataset(oracle, ds, num_workers=args.num_workers)
+        c_sel = (
             zeroshot_concept_codes(
                 oracle, prompted_pairs(cfg, dataset), v, cfg.zs_cutoffs or None
             )
@@ -195,18 +241,28 @@ def main():
             .astype(int)
         )
         print(
-            f"  pseudo-group accuracy on val (reported only): {(cv_sel == cv).mean():.3f}"
+            f"  pseudo-group accuracy on {split} (reported only): {(c_sel == c).mean():.3f}"
         )
-    gv = yv * n_codes + cv_sel
+        return y * n_codes + c_sel
+
+    gv = groups(yv, cv, val_l.dataset, "val")
+    if args.fit_on == "train":
+        gf = groups(yf, cf, train_ds, "train")
+        print(
+            "  train cells (fit groups): "
+            + "  ".join(f"{k}: {(gf == k).sum()}" for k in np.unique(gf))
+        )
 
     rng = np.random.default_rng(args.seed)
     perm = rng.permutation(len(yv))
     A, B = np.sort(perm[: len(yv) // 2]), np.sort(perm[len(yv) // 2 :])
     print(
         f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}  {args.method.upper()} "
-        f"({args.groups} groups)  val {len(yv)} / test {len(yt)}"
+        f"({args.groups} groups, fit on {args.fit_on})  val {len(yv)} / test {len(yt)}"
     )
-    if args.method == "dfr":
+    if args.method == "dfr" and args.fit_on == "train":
+        pred, params = dfr_train(xf, yf, gf, xv, yv, gv, xt, rng)
+    elif args.method == "dfr":
         pred, params = dfr(xv, yv, gv, A, B, xt, rng)
     else:
         fc = model.backbone.fc
@@ -226,7 +282,7 @@ def main():
     gt = yt * n_codes + ct
     worst, accs = wga(pred, yt, gt)
     row = dict(
-        run_name=f"{args.method}_{args.groups}",
+        run_name=f"{args.method}{'_tr' if args.fit_on == 'train' else ''}_{args.groups}",
         source_run=cfg.run_name,
         seed=cfg.seed,
         dataset=dataset,

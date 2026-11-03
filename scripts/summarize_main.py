@@ -35,6 +35,8 @@ LABEL = {
     "bam2": "BAM",
     "dfr_pseudo": "DFR, CLIP pseudo-groups",
     "dfr_true": "DFR, true groups (reference)",
+    "dfr_tr_pseudo": "DFR fitted on train, CLIP pseudo-groups",
+    "dfr_tr_true": "DFR fitted on train, true groups (reference)",
     "afr_pseudo": "AFR, selected on CLIP pseudo-groups",
     "afr_true": "AFR, selected on true groups (reference)",
 }
@@ -157,7 +159,14 @@ def main():
             for f in glob.glob(f"{ll_dir}/seed_*.csv"):
                 for r in csv.DictReader(open(f)):
                     ll[r["run_name"]].append(r)
-            for n in ("dfr_pseudo", "afr_pseudo", "dfr_true", "afr_true"):
+            for n in (
+                "dfr_pseudo",
+                "afr_pseudo",
+                "dfr_true",
+                "afr_true",
+                "dfr_tr_pseudo",
+                "dfr_tr_true",
+            ):
                 if ll.get(n):
                     line(f"{LABEL[n]} on {src}", ll[n], keys)
 
