@@ -112,6 +112,7 @@ def main():
         chosen = {}
         for fam, pat in (("jtt", JTT), ("bam2", BAM)):
             cands = {n: val_score(d) for n, d in methods.items() if re.match(pat, n)}
+            cands = {n: s for n, s in cands.items() if s[1] > 0}  # finished runs only
             if cands:
                 best = max(cands, key=lambda n: cands[n][0])
                 chosen[fam] = (best, cands)
