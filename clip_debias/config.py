@@ -257,6 +257,7 @@ class DebiasingConfig:
 
     # ── Model ─────────────────────────────────────────────────────────────────
     backbone: str = "resnet50"  # "resnet18" | "resnet50" | "vit_b_16"
+    pretrained: bool = True  # ImageNet weights; False = random init (from scratch)
     clip_model: str = "openai/clip-vit-base-patch32"
     clip_embed_dim: int = 512
 
@@ -270,6 +271,89 @@ class DebiasingConfig:
     # k=3  → recommended starting point.
     # Ablate k=1,2,3,5 to find optimal dimensionality.
     concept_subspace_k: int = 3
+
+    # How V_I_perp is formed from the subspace:
+    #   "orth"  — orthogonal projection (original)
+    #   "leace" — whitened LEACE-style erasure using the train-set CLIP image
+    #             covariance (label-free; see clip_oracle.fit_leace_eraser)
+    eraser: str = "orth"
+
+    # Data the whitened eraser (and so the concept scores) is fitted on:
+    #   "biased"   — the train set as is (original)
+    #   "balanced" — the train set reweighted to balance the (target × CLIP
+    #                zero-shot concept) pseudo-groups, so directions that covary
+    #                with the concept only through its label correlation stay
+    eraser_fit: str = "biased"
+
+    # What L_align does:
+    #   "proj" — cosine between the projection head P(E(x)) and V_I_perp (original)
+    #   "cka"  — 1 − linear CKA between E(x) itself and the LEACE-erased CLIP
+    #            embedding of the same batch (no head; losses.cka_alignment_loss)
+    align: str = "proj"
+
+    # What L_repulse penalises:
+    #   "orth"     — sum_k (P(E(x)) · b_k)^2 over the text-subspace basis (original)
+    #   "whitened" — squared batch correlation between E(x) and the whitened CLIP
+    #                concept scores of the same images (needs the fitted eraser;
+    #                see losses.decorrelation_loss)
+    #   "whitened_cond" — the same correlation computed within each class
+    #                (partial correlation given the label)
+    #   "raw"      — ablation: the same correlation with the centred raw
+    #                text-subspace scores (V_I − μ)·Sᵀ instead of the whitened
+    #                ones (identical for k=1; differs when the k scores correlate)
+    repulse: str = "orth"
+
+    # Core-concept promotion (discover_core.py): CLIP image-space directions the
+    # model under-uses, scored residual to the concept subspace (one joint
+    # whitened fit, concepts first).  A linear head on E(x) is trained to
+    # predict those scores; L_promote = mean_k (1 − corr(head_k, score_k)^2).
+    # core_dirs is the directions file, recorded for reference.
+    core_dirs: str = ""
+    lambda_promote: float = 0.0
+
+    # Baselines (clip_debias/baselines.py): GroupDRO over "pseudo" / "oracle"
+    # groups with step size dro_eta; JTT/BAM stage 2 upsamples the train errors
+    # in error_set by upweight; BAM stage 1 adds bam_aux · b_i to the logits.
+    group_dro: str = "none"
+    dro_eta: float = 0.01
+    error_set: str = ""
+    upweight: float = 1.0
+    bam_aux: float = 0.0
+    bam_lr: float = 1e-4  # SGD step of the auxiliaries (x batch size), not tied to lr
+    # Cross-fitting for discovery: with n_folds > 0 the run trains on every
+    # fold of a fold_seed permutation of train except `fold`, which
+    # discover_biases.py then predicts (held-out errors without the val split).
+    n_folds: int = 0
+    fold: int = 0
+    fold_seed: int = 0
+
+    # Group-balanced resampling of the train set over (target × concept) groups:
+    #   "none" | "pseudo" (CLIP zero-shot concept labels, label-free)
+    #   | "oracle" (true concept labels — reference upper bound only)
+    #   | "propensity" (weights 1/p(y|z) on the whitened CLIP concept scores,
+    #     label-free, no groups — see reweight.propensity_weights)
+    group_reweight: str = "none"
+
+    # Cutoff of the CLIP zero-shot concept labels (training pseudo-groups and
+    # the val pseudo-groups behind best_pseudo_wga.pt):
+    #   "zero" — score > 0 (original)
+    #   "gmm"  — per attribute, fitted on the unlabeled train scores with a
+    #            2-component Gaussian mixture (clip_oracle.fit_zeroshot_cutoff);
+    #            the fitted values are recorded in zs_cutoffs
+    zs_cutoff: str = "zero"
+    zs_cutoffs: List[float] = field(default_factory=list)
+
+    # Further spurious attributes (CelebA): the concept becomes the joint code
+    # concept_attr + 2*extra[0] + ..., with one text subspace per attribute.
+    extra_concept_attrs: List[str] = field(default_factory=list)
+
+    # Concept prompt pairs actually used (subspace, eraser, pseudo-groups, val
+    # pseudo-groups), as [[pos...], [neg...]] per concept.  Empty: derived from
+    # concept_attr + extra_concept_attrs (CelebA) or the prompt set (Waterbirds).
+    # Set when attributes are left unprompted (--prompt_attrs) or discovered and
+    # confirmed prompt pairs are added (--extra_prompts; discover_biases.py).
+    # Evaluation always uses the dataset's true attributes.
+    prompt_pairs: List[List[List[str]]] = field(default_factory=list)
 
     # ── Concept prompts ───────────────────────────────────────────────────────
     # Defaults are populated from CONCEPT_PROMPT_LIBRARY at config-factory time.
@@ -298,6 +382,12 @@ class DebiasingConfig:
     lambda_align_warmup_schedule: str = "cosine"  # "linear" | "cosine"
     lambda_repulse_decay: bool = True  # decay lambda_repulse from high start to target
     lambda_repulse_decay_schedule: str = "cosine"  # "linear" | "cosine"
+
+    # Sequential two-phase training: repulse-only until sequential_phase_switch_epoch,
+    # then align-only for the remainder. Hard switch, no interpolation. Only takes
+    # effect when sequential_mode=True (see sequential_config()).
+    sequential_mode: bool = False
+    sequential_phase_switch_epoch: int = 5
 
     # ── Run identity ──────────────────────────────────────────────────────────
     run_name: str = "debias"
@@ -329,6 +419,80 @@ def _apply_overrides(cfg: DebiasingConfig, overrides: dict) -> DebiasingConfig:
         pos, neg = get_concept_prompts(cfg.concept_attr)
         cfg.concept_prompts_pos = pos
         cfg.concept_prompts_neg = neg
+    return cfg
+
+
+def disable_lambda_schedules(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Turn off the calibrated lambda warmup/decay schedules (constant lambdas).
+
+    Appends "_nosched" to run_name when a schedule was actually active, so the
+    run is distinguishable in checkpoint dirs and summary.csv.  ERM and
+    sequential runs never use the schedules, so their names are left alone.
+    """
+    had_schedule = (
+        cfg.lambda_task_warmup or cfg.lambda_align_warmup or cfg.lambda_repulse_decay
+    )
+    is_erm = cfg.lambda_align == 0.0 and cfg.lambda_repulse == 0.0
+    cfg.lambda_task_warmup = False
+    cfg.lambda_align_warmup = False
+    cfg.lambda_repulse_decay = False
+    if had_schedule and not is_erm and not cfg.sequential_mode:
+        cfg.run_name += "_nosched"
+    return cfg
+
+
+def use_scratch_backbone(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Randomly initialise the backbone instead of loading ImageNet weights.
+
+    Appends "_scratch" to run_name (for every run, including ERM) so scratch
+    and pretrained runs are distinguishable in checkpoint dirs and summary.csv.
+    """
+    cfg.pretrained = False
+    cfg.run_name += "_scratch"
+    return cfg
+
+
+def use_leace_eraser(cfg: DebiasingConfig) -> DebiasingConfig:
+    """Form V_I_perp with the whitened eraser instead of orthogonal projection.
+
+    Only affects runs that use the alignment target (lambda_align > 0); those
+    get a "_leace" suffix.  Other runs are returned unchanged.
+    """
+    if cfg.lambda_align > 0:
+        cfg.eraser = "leace"
+        cfg.run_name += "_leace"
+    return cfg
+
+
+REPULSE_SUFFIX = {"whitened": "_wrep", "whitened_cond": "_wcrep", "raw": "_rrep"}
+
+
+def use_whitened_repulse(
+    cfg: DebiasingConfig, mode: str = "whitened"
+) -> DebiasingConfig:
+    """Replace L_repulse with the E(x)–concept-score decorrelation loss:
+    mode "whitened", "whitened_cond" (within each class) or "raw" (centred raw
+    text-subspace scores; ablation).
+
+    Only affects runs with lambda_repulse > 0; those get a "_wrep", "_wcrep"
+    or "_rrep" suffix.
+    """
+    if cfg.lambda_repulse > 0:
+        cfg.repulse = mode
+        cfg.run_name += REPULSE_SUFFIX[mode]
+    return cfg
+
+
+def use_group_reweighting(cfg: DebiasingConfig, mode: str) -> DebiasingConfig:
+    """Train on reweighted batches (group-balanced for 'pseudo'/'oracle',
+    inverse propensity on CLIP concept scores for 'propensity'); appends
+    "_grw_<mode>"."""
+    if mode not in ("pseudo", "oracle", "propensity"):
+        raise ValueError(
+            f"group_reweight must be 'pseudo', 'oracle' or 'propensity', got {mode!r}"
+        )
+    cfg.group_reweight = mode
+    cfg.run_name += f"_grw_{mode}"
     return cfg
 
 
@@ -383,5 +547,27 @@ def full_strong_config(**overrides) -> DebiasingConfig:
         lambda_task=1.0,
         lambda_align=2.0,
         lambda_repulse=2.0,
+    )
+    return _apply_overrides(cfg, overrides)
+
+
+def sequential_config(**overrides) -> DebiasingConfig:
+    """Two-phase: repulse-only, then hard-switch to align-only.
+
+    Avoids the gradient conflict between L_align and L_repulse by never
+    running them concurrently. lambda_task_warmup / lambda_align_warmup /
+    lambda_repulse_decay are disabled since the phase switch is a hard
+    step, not a continuous schedule.
+    """
+    cfg = DebiasingConfig(
+        run_name="sequential",
+        lambda_task=1.0,
+        lambda_align=1.0,
+        lambda_repulse=1.0,
+        lambda_task_warmup=False,
+        lambda_align_warmup=False,
+        lambda_repulse_decay=False,
+        sequential_mode=True,
+        sequential_phase_switch_epoch=5,
     )
     return _apply_overrides(cfg, overrides)

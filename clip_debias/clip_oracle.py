@@ -29,31 +29,79 @@ diverge in the training logs.  If they still track each other, increase k.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, NamedTuple, Sequence, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-from transformers import CLIPModel, CLIPProcessor
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoModel, AutoProcessor
+
+from .clip_preprocess import RenormalizeForCLIP
 
 # ── CLIP wrapper ──────────────────────────────────────────────────────────────
 
 
 class CLIPOracle:
-    """Thin wrapper around a frozen HuggingFace CLIP model."""
+    """Thin wrapper around a frozen image-text dual encoder: any Hugging Face
+    `transformers` CLIP/SigLIP checkpoint, or an OpenCLIP model given as
+    "hf-hub:<repo>" (e.g. hf-hub:timm/PE-Core-L-14-336 for Perception Encoder).
+    `preprocess` maps the training pipeline's ImageNet-normalised 224px batches
+    to the encoder's input; `embed_dim` is the joint embedding size."""
 
     def __init__(self, model_name: str, device: str = "cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.model = CLIPModel.from_pretrained(model_name).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
+        if model_name.startswith("hf-hub:"):
+            self._init_open_clip(model_name)
+            return
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
+        self.processor = AutoProcessor.from_pretrained(model_name)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
+        self.model_type = self.model.config.model_type
+        ip = self.processor.image_processor
+        size = getattr(ip, "crop_size", None) or ip.size
+        self.image_size = size.get("height") or size.get("shortest_edge")
+        self.preprocess = RenormalizeForCLIP(
+            ip.image_mean, ip.image_std, self.image_size
+        ).to(self.device)
+        self.embed_dim = self.encode_text(["a photo"]).shape[-1]
+
+    def _init_open_clip(self, model_name: str):
+        import open_clip  # optional backend, only needed for hf-hub: models
+
+        self.model, _ = open_clip.create_model_from_pretrained(model_name)
+        self.model = self.model.to(self.device).eval()
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+        self.model_type = "open_clip"
+        size = self.model.visual.image_size
+        self.image_size = size[0] if isinstance(size, (tuple, list)) else size
+        self.preprocess = RenormalizeForCLIP(
+            self.model.visual.image_mean, self.model.visual.image_std, self.image_size
+        ).to(self.device)
+        self.embed_dim = self.encode_text(["a photo"]).shape[-1]
 
     @torch.no_grad()
     def encode_text(self, texts: List[str]) -> torch.Tensor:
         """(N, D) unit-normalised text embeddings."""
+        if self.model_type == "open_clip":
+            feats = self.model.encode_text(self.tokenizer(texts).to(self.device))
+            return F.normalize(feats.float(), dim=-1)
+        # SigLIP was trained on text padded to its full length (64 tokens for
+        # most checkpoints, 16 for so400m-patch14-224)
+        pad = (
+            dict(
+                padding="max_length",
+                max_length=self.model.config.text_config.max_position_embeddings,
+            )
+            if self.model_type.startswith("siglip")
+            else dict(padding=True)
+        )
         inputs = self.processor(
-            text=texts, return_tensors="pt", padding=True, truncation=True
+            text=texts, return_tensors="pt", truncation=True, **pad
         ).to(self.device)
         out = self.model.get_text_features(**inputs)
         feats = out.pooler_output if hasattr(out, "pooler_output") else out
@@ -62,6 +110,8 @@ class CLIPOracle:
     @torch.no_grad()
     def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """(B, D) unit-normalised image embeddings from CLIP-preprocessed pixels."""
+        if self.model_type == "open_clip":
+            return F.normalize(self.model.encode_image(pixel_values).float(), dim=-1)
         out = self.model.get_image_features(pixel_values=pixel_values)
         feats = out.pooler_output if hasattr(out, "pooler_output") else out
         return F.normalize(feats, dim=-1)
@@ -141,6 +191,23 @@ def compute_concept_subspace(
     return subspace
 
 
+def compute_multi_concept_subspace(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    k: int = 3,
+) -> torch.Tensor:
+    """Concept subspace for several attributes: each attribute's top-k text
+    subspace (compute_concept_subspace), stacked and re-orthonormalised.
+    One attribute returns exactly compute_concept_subspace's result."""
+    parts = [
+        compute_concept_subspace(oracle, pos, neg, k=k) for pos, neg in prompt_pairs
+    ]
+    if len(parts) == 1:
+        return parts[0]
+    q, _ = torch.linalg.qr(torch.cat(parts).T)  # (D, sum k) orthonormal columns
+    return q.T.contiguous()
+
+
 # ── Kept for backwards compatibility / Waterbirds use ────────────────────────
 
 
@@ -206,6 +273,190 @@ def orthogonal_project(
     return v_i - coeff * v_t_hat
 
 
+# ── Whitened (LEACE-style) erasure ────────────────────────────────────────────
+#
+# Orthogonal projection removes the component of V_I along the text directions,
+# but CLIP image embeddings are strongly anisotropic, so the concept stays
+# linearly decodable from correlated directions (probe_clip_target.py: place /
+# gender probes are unchanged by it).  The whitened eraser removes everything
+# in V_I that linearly covaries with the text-subspace scores, using only the
+# unlabeled image covariance — still label-free.
+
+
+class Eraser(NamedTuple):
+    mu: torch.Tensor  # (D,)   train-set mean of V_I
+    M: torch.Tensor  # (D, D) erasure map:  x' = x − (x − μ) Mᵀ
+    R: (
+        torch.Tensor
+    )  # (r, D) whitened concept scores:  z = (x − μ) Rᵀ  (unit variance, decorrelated)
+
+    def to(self, device) -> "Eraser":
+        return Eraser(*(t.to(device) for t in self))
+
+
+def _weighted_mean_cov(
+    x: torch.Tensor, weights: torch.Tensor | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean and covariance of x (N, D), optionally with per-example weights."""
+    if weights is None:
+        mu = x.mean(0)
+        return mu, torch.cov((x - mu).T)
+    w = weights.double() / weights.double().sum()
+    mu = w @ x
+    xc = x - mu
+    return mu, (xc * w[:, None]).T @ xc / (1.0 - w.pow(2).sum())
+
+
+def fit_leace(
+    x: torch.Tensor,
+    cross_cov: torch.Tensor,
+    eps: float = 1e-6,
+    weights: torch.Tensor | None = None,
+) -> Eraser:
+    """LEACE-style eraser (Belrose et al. 2023) for features x (N, D).
+
+    Erases the span of `cross_cov` (D, r) — the covariance between x and the
+    variable(s) to erase — in whitened coordinates:
+        x' = x − (x − μ) Mᵀ,   M = W⁺ Q Qᵀ W,   W = Σ^{-1/2},
+    with Q an orthonormal basis of W·cross_cov.  Afterwards no linear function
+    of x' covaries with those variables.  Also returns R = Qᵀ W, which maps x
+    to the whitened scores of what the eraser removes.  `weights` (N,) fits μ
+    and Σ on a reweighted distribution.  Fit in float64 on CPU.
+    """
+    x = x.detach().double().cpu()
+    mu, cov = _weighted_mean_cov(x, weights)
+    evals, evecs = torch.linalg.eigh(cov)
+    evals = evals.clamp_min(eps)
+    W = (evecs / evals.sqrt()) @ evecs.T
+    W_pinv = (evecs * evals.sqrt()) @ evecs.T
+    Q, _ = torch.linalg.qr(W @ cross_cov.detach().double().cpu())
+    return Eraser(mu.float(), (W_pinv @ Q @ Q.T @ W).float(), (Q.T @ W).float())
+
+
+def fit_leace_eraser(
+    v_i: torch.Tensor, subspace: torch.Tensor, weights: torch.Tensor | None = None
+) -> Eraser:
+    """Label-free eraser for the text subspace: cross-covariance of V_I with its
+    own subspace scores (V_I · b_k) is Σ Sᵀ.  With `weights` (e.g. pseudo-group
+    balancing weights) μ and Σ come from the reweighted train set, so directions
+    that only covary with the concept through the label correlation of the
+    biased set are not erased."""
+    x = v_i.detach().double().cpu()
+    _, cov = _weighted_mean_cov(x, weights)
+    cross_cov = cov @ subspace.detach().double().cpu().T
+    return fit_leace(x, cross_cov, weights=weights)
+
+
+def leace_project(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:
+    return v_i - (v_i - eraser.mu) @ eraser.M.T
+
+
+def whitened_concept_scores(v_i: torch.Tensor, eraser: Eraser) -> torch.Tensor:
+    """(B, r) label-free concept scores of V_I: its text-subspace scores,
+    centred and whitened with the train-set image covariance."""
+    return (v_i - eraser.mu) @ eraser.R.T
+
+
+@torch.no_grad()
+def embed_dataset(
+    oracle: CLIPOracle, dataset: Dataset, batch_size: int = 256, num_workers: int = 4
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One ordered CLIP pass over a (image, label, concept) dataset whose images
+    are ImageNet-normalised (as in training).  Returns CPU tensors
+    v_i (N, D), labels (N,), concepts (N,), aligned with dataset indices."""
+    renorm = oracle.preprocess
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+    )
+    v_i, labels, concepts = [], [], []
+    for images, y, c in loader:
+        v_i.append(oracle.encode_images(renorm(images.to(oracle.device))).float().cpu())
+        labels.append(y)
+        concepts.append(c)
+    return torch.cat(v_i), torch.cat(labels), torch.cat(concepts)
+
+
+@torch.no_grad()
+def concept_margin(
+    oracle: CLIPOracle,
+    prompts_pos: List[str],
+    prompts_neg: List[str],
+    v_i: torch.Tensor,
+) -> torch.Tensor:
+    """(N,) CLIP zero-shot concept score: V_I · (mean positive − mean negative
+    prompt embedding)."""
+    d = oracle.encode_text(prompts_pos).mean(0) - oracle.encode_text(prompts_neg).mean(
+        0
+    )
+    return (v_i.to(d.device).float() @ d.float()).cpu()
+
+
+def fit_zeroshot_cutoff(scores: torch.Tensor) -> float:
+    """Label-free cutoff for a zero-shot concept score: fit a two-component 1-D
+    Gaussian mixture to the unlabeled scores and return the point between the
+    component means where the posteriors are equal (so the mixture's own
+    estimate of the class proportions is used).  Falls back to the midpoint of
+    the means if the weighted components do not cross between them."""
+    from sklearn.mixture import GaussianMixture
+
+    g = GaussianMixture(2, n_init=3, random_state=0).fit(
+        scores.double().numpy()[:, None]
+    )
+    m, sd, w = g.means_.ravel(), np.sqrt(g.covariances_.ravel()), g.weights_
+    lo, hi = np.argsort(m)
+    grid = np.linspace(m[lo], m[hi], 2001)
+
+    def log_post(k):
+        return np.log(w[k]) - np.log(sd[k]) - 0.5 * ((grid - m[k]) / sd[k]) ** 2
+
+    diff = log_post(hi) - log_post(lo)  # < 0 near m[lo], > 0 near m[hi]
+    if diff[0] < 0 < diff[-1]:
+        return float(grid[np.argmax(diff > 0)])
+    return float((m[lo] + m[hi]) / 2)
+
+
+def fit_zeroshot_cutoffs(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    v_i: torch.Tensor,
+) -> List[float]:
+    """One fitted cutoff per attribute (see fit_zeroshot_cutoff), from the
+    unlabeled train embeddings."""
+    return [
+        fit_zeroshot_cutoff(concept_margin(oracle, pos, neg, v_i))
+        for pos, neg in prompt_pairs
+    ]
+
+
+def zeroshot_concept_labels(
+    oracle: CLIPOracle,
+    prompts_pos: List[str],
+    prompts_neg: List[str],
+    v_i: torch.Tensor,
+    cutoff: float = 0.0,
+) -> torch.Tensor:
+    """CLIP zero-shot concept prediction: 1 if the concept score exceeds
+    `cutoff` (0: V_I is closer to the mean positive prompt embedding than to
+    the mean negative one)."""
+    return (concept_margin(oracle, prompts_pos, prompts_neg, v_i) > cutoff).long()
+
+
+def zeroshot_concept_codes(
+    oracle: CLIPOracle,
+    prompt_pairs: List[Tuple[List[str], List[str]]],
+    v_i: torch.Tensor,
+    cutoffs: Sequence[float] | None = None,
+) -> torch.Tensor:
+    """Joint zero-shot concept code sum_j 2^j * c_j over several attributes
+    (attribute j = prompt_pairs[j], cut at cutoffs[j], default 0); one
+    attribute gives the plain 0/1 label."""
+    cutoffs = list(cutoffs) if cutoffs else [0.0] * len(prompt_pairs)
+    code = torch.zeros(len(v_i), dtype=torch.long)
+    for j, (pos, neg) in enumerate(prompt_pairs):
+        code += zeroshot_concept_labels(oracle, pos, neg, v_i, cutoffs[j]) << j
+    return code
+
+
 # ── Distillation target computation ──────────────────────────────────────────
 
 
@@ -215,6 +466,7 @@ def compute_distillation_targets(
     pixel_values: torch.Tensor,
     subspace: torch.Tensor,
     renormalize: bool = True,
+    eraser: Eraser | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Full pipeline for one batch:
@@ -229,6 +481,8 @@ def compute_distillation_targets(
     subspace     : (k, D) orthonormal concept subspace
                    (pass a (1, D) tensor to replicate the single-direction case)
     renormalize  : whether to L2-normalise V_I_perp before returning
+    eraser       : Eraser from fit_leace_eraser — if given, V_I_perp uses the
+                   whitened eraser instead of orthogonal projection of `subspace`
 
     Returns
     -------
@@ -236,7 +490,10 @@ def compute_distillation_targets(
     v_i_perp : (B, D)  concept-scrubbed embeddings    (backbone target)
     """
     v_i = oracle.encode_images(pixel_values)  # (B, D)
-    v_i_perp = orthogonal_project_subspace(v_i, subspace)  # (B, D)
+    if eraser is not None:
+        v_i_perp = leace_project(v_i, eraser)  # (B, D)
+    else:
+        v_i_perp = orthogonal_project_subspace(v_i, subspace)  # (B, D)
     if renormalize:
         v_i_perp = F.normalize(v_i_perp, dim=-1)
     return v_i, v_i_perp

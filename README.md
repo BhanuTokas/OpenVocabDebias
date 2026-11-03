@@ -57,6 +57,18 @@ All conditions use `λ_task=1.0` and identical hyperparameters, optimiser, and s
 python eval.py --checkpoint checkpoints/best.pt
 ```
 
+## Tests
+
+CPU-only unit tests for the losses, GroupDRO, the K-fold split, discovery and DFR,
+on synthetic tensors (no datasets or CLIP weights):
+
+```bash
+uv run --locked pytest    # or: python -m pytest
+```
+
+`uv.lock` is the canonical environment (used on Sol); `requirements.txt` lists the
+same core packages for pip installs.
+
 ## Notes
 
 - The repulse term penalises `(P(E(x)) · V̂_T)²`, so it targets both positive and negative concept correlations

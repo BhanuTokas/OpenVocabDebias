@@ -1,0 +1,85 @@
+#!/bin/bash
+#SBATCH -J main_posthoc
+#SBATCH -p public
+#SBATCH -q public
+#SBATCH -G a100:1
+#SBATCH -c 8
+#SBATCH --mem=32G
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
+
+# Main tables, post-hoc baselines (submitted by scripts/submit_main.sh after the
+# ERM runs):
+#   METHOD=last_layer  DFR and AFR on the SRC run of each seed (array over
+#                      SEEDS; SRC default erm at best.pt, other methods at
+#                      best_pseudo_wga.pt), with true groups (reference) and CLIP
+#                      pseudo-groups (label-free)
+#                      -> results_<ROOT>/<TAG>/last_layer/ (erm) or last_layer_<SRC>/
+#   METHOD=dfr_tr      DFR fitted on train (DFR^Tr_Tr; val only selects C), true
+#                      and pseudo groups, same SRC / outputs as last_layer
+#                      (seed_<S>_tr.csv next to seed_<S>.csv)
+#   METHOD=probe       frozen-CLIP zero-shot / probe / balanced probe (one task,
+#                      seed-independent)                -> results_<ROOT>/<DATASET>_clip_probe.csv
+# DATASET, BACKBONE, SEEDS, ROOT, CELEBA_ROOT as in scripts/main_run.sh.
+
+module purge
+export PATH="$HOME/.local/bin:$PATH"   # uv
+set -euo pipefail
+export PYTHONNOUSERSITE=1              # keep ~/.local packages out of the env
+export UV_PYTHON_PREFERENCE=only-managed  # uv's Python, not Sol's system one
+export PYTHONUNBUFFERED=1             # live logs
+cd "$SLURM_SUBMIT_DIR"                 # not dirname $0: SLURM runs a spooled copy
+if [ ! -f last_layer.py ]; then
+    echo "Submit from the OpenVocabDebias repo root (last_layer.py not found in $PWD)" >&2
+    exit 1
+fi
+: "${DATASET:?}" "${METHOD:?}"
+read -ra SEEDS <<< "${SEEDS:-42 123 456 789 1011}"
+WORKERS=${SLURM_CPUS_PER_TASK:-8}
+ROOT=${ROOT:-main}
+DATA_ARGS=()
+if [ "$DATASET" = celeba ]; then
+    : "${CELEBA_ROOT:?set CELEBA_ROOT to the directory containing celeba/}"
+    DATA_ARGS=(--celeba_root "$CELEBA_ROOT")
+fi
+RUN="uv run --locked python"
+$RUN -c "import numpy, torch, sys; print(sys.executable); print('numpy', numpy.__version__); print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+
+if [ "$METHOD" = probe ]; then
+    if [ "$DATASET" = wb ]; then
+        $RUN clip_probe.py --dataset waterbirds --prompts sentences --num_workers "$WORKERS" \
+            --out "results_${ROOT}/wb_clip_probe.csv"
+    else
+        $RUN clip_probe.py --dataset celeba "${DATA_ARGS[@]}" --concept_attr Male \
+            --num_workers "$WORKERS" --out "results_${ROOT}/celeba_clip_probe.csv"
+    fi
+    exit 0
+fi
+
+: "${BACKBONE:?}"
+SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
+TAG=${DATASET}_${BACKBONE}
+SRC=${SRC:-erm}
+RUN_DIR=$(ls -d "./checkpoints_${ROOT}/${TAG}/${SRC}"/*/seed_"$SEED"/*/ | tail -1)
+if [ "$SRC" = erm ]; then
+    CKPT=best.pt; OUT=./results_${ROOT}/${TAG}/last_layer/seed_${SEED}.csv
+else
+    CKPT=best_pseudo_wga.pt; OUT=./results_${ROOT}/${TAG}/last_layer_${SRC}/seed_${SEED}.csv
+fi
+if [ "$METHOD" = dfr_tr ]; then
+    OUT=${OUT%.csv}_tr.csv
+    rm -f "$OUT"
+    for g in true pseudo; do
+        $RUN last_layer.py "$RUN_DIR" --ckpt "$CKPT" --method dfr --fit_on train --groups "$g" \
+            --seed "$SEED" "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$OUT"
+    done
+    exit 0
+fi
+rm -f "$OUT"
+for m in dfr afr; do
+    for g in true pseudo; do
+        $RUN last_layer.py "$RUN_DIR" --ckpt "$CKPT" --method "$m" --groups "$g" --seed "$SEED" \
+            "${DATA_ARGS[@]}" --num_workers "$WORKERS" --out "$OUT"
+    done
+done

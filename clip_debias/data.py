@@ -105,7 +105,8 @@ class CelebADebias(Dataset):
     """
     Thin wrapper around torchvision CelebA that returns
         (image, target_label, concept_label)
-    where both labels are scalar {0, 1} tensors.
+    where both labels are scalar {0, 1} tensors.  With extra_concept_attrs the
+    concept is the joint code  concept_attr + 2*extra[0] + 4*extra[1] + ...
     """
 
     def __init__(
@@ -115,6 +116,7 @@ class CelebADebias(Dataset):
         target_attr: str,
         concept_attr: str,
         transform=None,
+        extra_concept_attrs=(),
     ):
         self.base = CelebA(
             root=root,
@@ -124,7 +126,9 @@ class CelebADebias(Dataset):
             download=False,  # set True on first run
         )
         self.target_idx = attr_index(target_attr)
-        self.concept_idx = attr_index(concept_attr)
+        self.concept_idxs = [attr_index(concept_attr)] + [
+            attr_index(a) for a in extra_concept_attrs
+        ]
 
     def __len__(self) -> int:
         return len(self.base)
@@ -132,7 +136,7 @@ class CelebADebias(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         image, attrs = self.base[idx]
         target = attrs[self.target_idx].long()
-        concept = attrs[self.concept_idx].long()
+        concept = sum(attrs[i].long() << j for j, i in enumerate(self.concept_idxs))
         return image, target, concept
 
 
@@ -148,6 +152,7 @@ def build_dataloaders(cfg) -> Tuple[DataLoader, DataLoader, DataLoader]:
         "train",
         cfg.target_attr,
         cfg.concept_attr,
+        extra_concept_attrs=cfg.extra_concept_attrs,
         transform=get_train_transform(),
     )
     val_ds = CelebADebias(
@@ -155,6 +160,7 @@ def build_dataloaders(cfg) -> Tuple[DataLoader, DataLoader, DataLoader]:
         "valid",
         cfg.target_attr,
         cfg.concept_attr,
+        extra_concept_attrs=cfg.extra_concept_attrs,
         transform=get_eval_transform(),
     )
     test_ds = CelebADebias(
@@ -162,6 +168,7 @@ def build_dataloaders(cfg) -> Tuple[DataLoader, DataLoader, DataLoader]:
         "test",
         cfg.target_attr,
         cfg.concept_attr,
+        extra_concept_attrs=cfg.extra_concept_attrs,
         transform=get_eval_transform(),
     )
 

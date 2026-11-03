@@ -20,7 +20,6 @@ Usage
 """
 
 import argparse
-import csv
 import os
 import random
 from collections import defaultdict
@@ -32,17 +31,42 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from clip_debias.clip_oracle import CLIPOracle, compute_concept_subspace
+from clip_debias.clip_oracle import (
+    CLIPOracle,
+    compute_multi_concept_subspace,
+    embed_dataset,
+    fit_leace_eraser,
+    fit_zeroshot_cutoffs,
+    whitened_concept_scores,
+    zeroshot_concept_codes,
+)
 from clip_debias.config import (
     DebiasingConfig,
     align_only_config,
     erm_config,
     full_config,
     full_strong_config,
+    sequential_config,
+    disable_lambda_schedules,
+    use_scratch_backbone,
+    use_leace_eraser,
+    use_whitened_repulse,
+    use_group_reweighting,
     repulse_only_config,
 )
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
+from clip_debias.results_io import append_result
+from clip_debias.discovery import load_core_dirs, load_prompt_file, prompt_directions
+from clip_debias.baselines import (
+    add_baseline_args,
+    apply_baseline_args,
+    dro_groups,
+    error_set_weights,
+    fold_loader,
+    indexed_loader,
+)
+from clip_debias.reweight import group_weights, propensity_weights, weighted_loader
 from clip_debias.trainer import Trainer
 from clip_debias.waterbirds_data import build_waterbirds_dataloaders
 
@@ -61,6 +85,7 @@ RUN_FACTORIES = {
     "repulse_only": repulse_only_config,
     "full": full_config,
     "full_strong": full_strong_config,
+    "sequential": sequential_config,
 }
 
 SEEDS = [42, 123, 456]
@@ -77,6 +102,45 @@ NEG_WORDS = [
     "vegetation",
 ]
 
+# Waterbirds backgrounds come from Places: ocean / natural lake (water) and
+# bamboo forest / broadleaf forest (land).  Same length → per-pair differences.
+WATER_PLACES = [
+    "over the ocean",
+    "on a lake",
+    "at the beach",
+    "near the shore",
+    "on the water",
+    "by the sea",
+]
+LAND_PLACES = [
+    "in a bamboo forest",
+    "in a broadleaf forest",
+    "in the woods",
+    "on a tree branch",
+    "among green foliage",
+    "in a forest",
+]
+WB_TEMPLATES = [
+    "a photo of a bird {}",
+    "a bird {}",
+    "a photo of something {}",
+    "a picture taken {}",
+]
+
+# Concept prompt sets (pos = water, neg = land).  They define the concept
+# subspace, the whitened eraser and the CLIP zero-shot pseudo-labels.
+PROMPT_SETS = {
+    "words": (POS_WORDS, NEG_WORDS),
+    "sentences": (
+        [f"a photo of a bird {p}" for p in WATER_PLACES],
+        [f"a photo of a bird {p}" for p in LAND_PLACES],
+    ),
+    "ensemble": (
+        [t.format(p) for t in WB_TEMPLATES for p in WATER_PLACES],
+        [t.format(p) for t in WB_TEMPLATES for p in LAND_PLACES],
+    ),
+}
+
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -87,15 +151,6 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def append_result(path: str, row: dict):
-    file_exists = os.path.isfile(path)
-    with open(path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys())
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
 
 
 def print_summary(all_results: List[dict]):
@@ -189,6 +244,138 @@ def parse_args():
         help="Number of SVD components for concept subspace (default: 3; "
         "use 1 to reproduce single-direction behaviour)",
     )
+    parser.add_argument(
+        "--sequential_switch_epoch",
+        type=int,
+        default=5,
+        help="For the 'sequential' run: epoch at which training hard-switches "
+        "from repulse-only to align-only (default: 5, for 10-epoch runs)",
+    )
+    parser.add_argument(
+        "--no_lambda_schedules",
+        action="store_true",
+        help="Use constant lambdas: disable the calibrated lambda_task/lambda_align "
+        "warmup and lambda_repulse decay. Affected runs get a '_nosched' suffix.",
+    )
+    parser.add_argument(
+        "--scratch",
+        action="store_true",
+        help="Randomly initialise the backbone instead of loading ImageNet weights. "
+        "All runs get a '_scratch' suffix; raise --epochs/--lr accordingly.",
+    )
+    parser.add_argument(
+        "--eraser",
+        default="orth",
+        choices=["orth", "leace"],
+        help="How V_I_perp is formed: orthogonal projection of the text subspace, "
+        "or whitened LEACE-style erasure fit on the train-set CLIP image covariance "
+        "(label-free). Runs using the alignment target get a '_leace' suffix.",
+    )
+    parser.add_argument(
+        "--repulse",
+        default="orth",
+        choices=["orth", "whitened", "whitened_cond", "raw"],
+        help="What L_repulse penalises: P(E(x)) along the text-subspace basis, or "
+        "the batch correlation between E(x) and the whitened CLIP concept scores "
+        "(label-free); 'whitened_cond' computes that correlation within each class; "
+        "'raw' uses the centred raw text-subspace scores instead (ablation). "
+        "Runs with lambda_repulse > 0 get a '_wrep' / '_wcrep' / '_rrep' suffix.",
+    )
+    parser.add_argument(
+        "--align",
+        default="proj",
+        choices=["proj", "cka"],
+        help="What L_align does: cosine of the projection head to V_I_perp, or "
+        "1 - linear CKA between E(x) and the LEACE-erased CLIP embedding (no head). "
+        "'cka' adds an '_acka' suffix to runs with lambda_align > 0.",
+    )
+    parser.add_argument(
+        "--lambda_align",
+        type=float,
+        default=None,
+        help="Override lambda_align for runs that have an align term "
+        "(adds a '_lal<value>' suffix). Default: each run config's own value.",
+    )
+    parser.add_argument(
+        "--eraser_fit",
+        default="biased",
+        choices=["biased", "balanced"],
+        help="Fit the whitened eraser / concept scores on the train set as is, or "
+        "reweighted to balance the (target x CLIP zero-shot concept) pseudo-groups "
+        "(label-free). 'balanced' adds an '_efbal' suffix.",
+    )
+    parser.add_argument(
+        "--zs_cutoff",
+        default="zero",
+        choices=["zero", "gmm"],
+        help="Cutoff of the CLIP zero-shot concept labels (pseudo-groups and the "
+        "val pseudo-groups for best_pseudo_wga.pt): 0, or fitted per attribute on "
+        "the unlabeled train scores with a 2-component Gaussian mixture. 'gmm' "
+        "adds a '_zsgmm' suffix to every run.",
+    )
+    parser.add_argument(
+        "--lambda_repulse",
+        type=float,
+        default=None,
+        help="Override lambda_repulse for runs that have a repulse term "
+        "(adds a '_lrep<value>' suffix). Default: each run config's own value.",
+    )
+    parser.add_argument(
+        "--group_reweight",
+        default="none",
+        choices=["none", "pseudo", "oracle", "propensity"],
+        help="Group-balanced resampling over (target x concept) groups, with concept "
+        "labels from CLIP zero-shot prediction ('pseudo', label-free) or the "
+        "dataset ('oracle', reference only); 'propensity' weights by "
+        "1/p(y|z) on the whitened CLIP concept scores instead (label-free, no "
+        "groups). Adds a '_grw_<mode>' suffix.",
+    )
+    parser.add_argument(
+        "--clip_model",
+        default=DebiasingConfig.clip_model,
+        help="Frozen image-text encoder: a Hugging Face CLIP/SigLIP id (e.g. "
+        "google/siglip-base-patch16-224) or an OpenCLIP hf-hub:<repo> id (e.g. "
+        "hf-hub:timm/PE-Core-B-16).  A non-default encoder adds an "
+        "'_enc-<name>' suffix to every run.",
+    )
+    parser.add_argument(
+        "--extra_prompts",
+        default=None,
+        help="JSON file from discover_biases.py: its accepted (pos, neg) prompt "
+        "pairs are added as further concepts (subspace, eraser, pseudo-groups). "
+        "Adds an '_xp-<file stem>' suffix.",
+    )
+    parser.add_argument(
+        "--core_dirs",
+        default=None,
+        help="JSON file from discover_core.py: its accepted core directions are "
+        "promoted (a head on E(x) predicts their whitened scores, residual to the "
+        "concept subspace).  Needs --lambda_promote > 0.",
+    )
+    parser.add_argument(
+        "--core_prompts",
+        default=None,
+        help="Written alternative to --core_dirs: a JSON file of accepted (pos, neg) "
+        "prompt pairs (discover_biases.py format), each promoted as the direction "
+        "mean(pos) - mean(neg), residual to the concept subspace.",
+    )
+    parser.add_argument(
+        "--lambda_promote",
+        type=float,
+        default=0.0,
+        help="Weight of the core-promotion loss for runs with a debiasing term. "
+        "Adds a '_core_lpro<v>' suffix (--core_dirs) or '_corep-<file stem>_lpro<v>' "
+        "(--core_prompts).",
+    )
+    parser.add_argument(
+        "--prompts",
+        default="words",
+        choices=list(PROMPT_SETS) + ["none"],
+        help="Concept prompt set for the subspace, eraser and pseudo-labels "
+        "('none': only the --extra_prompts pairs). "
+        "Anything but 'words' adds a '_p<set>' suffix to every run.",
+    )
+    add_baseline_args(parser)
     return parser.parse_args()
 
 
@@ -214,6 +401,7 @@ def main():
         amp=not args.no_amp,
         device=device,
         concept_subspace_k=args.concept_subspace_k,
+        clip_model=args.clip_model,
     )
 
     print("\nBuilding dataloaders …")
@@ -229,25 +417,116 @@ def main():
     )
 
     # ── Load CLIP and compute concept subspace (once, shared across all runs) ─
-    need_clip = any(r != "erm" for r in args.runs)
-    oracle = subspace = None
-    if need_clip:
-        print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
-        oracle = CLIPOracle(ref_cfg.clip_model, device=device)
+    # CLIP is always loaded: val pseudo-labels drive best_pseudo_wga.pt for every run
+    print(f"\nLoading CLIP ({ref_cfg.clip_model}) …")
+    oracle = CLIPOracle(ref_cfg.clip_model, device=device)
+    print(f"  embed dim {oracle.embed_dim}, input {oracle.image_size}px")
 
-        # pos_words = get_synonyms("water")
-        # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
-        print(f"  pos: {POS_WORDS}")
-        print(f"  neg: {NEG_WORDS}")
+    # pos_words = get_synonyms("water")
+    # neg_words = get_random_base_nouns(n=len(pos_words)*5, exclude_words=set(pos_words), seed=42)
+    prompt_pairs = [] if args.prompts == "none" else [PROMPT_SETS[args.prompts]]
+    print(f"  prompts: {args.prompts}")
+    if args.extra_prompts:
+        prompt_pairs = prompt_pairs + load_prompt_file(args.extra_prompts)
+        print(f"  + confirmed prompt pairs from {args.extra_prompts}")
+    if not prompt_pairs:
+        raise SystemExit("--prompts none needs --extra_prompts")
+    for pos, neg in prompt_pairs:
+        print(f"  pos: {pos}")
+        print(f"  neg: {neg}")
+    prompts_pos, prompts_neg = prompt_pairs[0]
+    custom_pairs = args.prompts == "none" or bool(args.extra_prompts)
 
-        print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
-        subspace = compute_concept_subspace(
-            oracle,
-            prompts_pos=POS_WORDS,
-            prompts_neg=NEG_WORDS,
-            k=args.concept_subspace_k,
+    print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
+    subspace = compute_multi_concept_subspace(
+        oracle, prompt_pairs, k=args.concept_subspace_k
+    )
+    print(f"  subspace shape: {tuple(subspace.shape)}")
+
+    # ── Val pseudo-labels: label-free checkpoint selection (best_pseudo_wga.pt) ─
+    print("\nEmbedding the val split with CLIP …")
+    v_va, _, c_va = embed_dataset(
+        oracle, val_loader.dataset, num_workers=ref_cfg.num_workers
+    )
+
+    # ── One CLIP pass over train: whitened eraser and/or group labels ─────────
+    core_file = args.core_dirs or args.core_prompts
+    if args.core_dirs and args.core_prompts:
+        raise SystemExit("pass --core_dirs or --core_prompts, not both")
+    if bool(core_file) != (args.lambda_promote > 0):
+        raise SystemExit(
+            "--core_dirs/--core_prompts and --lambda_promote > 0 go together"
         )
-        print(f"  subspace shape: {tuple(subspace.shape)}")
+    need_eraser = (
+        args.eraser == "leace"
+        or args.align == "cka"
+        or args.repulse != "orth"
+        or args.group_reweight == "propensity"
+        or args.lambda_promote > 0
+    )
+    eraser = core_eraser = train_weights = cutoffs = None
+    c_hat = train_groups = None
+    if args.error_set and args.group_reweight != "none":
+        raise SystemExit("--error_set replaces --group_reweight; pass only one")
+    if args.n_folds > 0 and (
+        args.error_set or args.group_reweight != "none" or args.group_dro != "none"
+    ):
+        raise SystemExit("--n_folds is for plain ERM / method runs without reweighting")
+    if (
+        need_eraser
+        or args.group_reweight != "none"
+        or args.zs_cutoff != "zero"
+        or args.group_dro != "none"
+    ):
+        print("\nEmbedding the train split with CLIP …")
+        v_tr, y_tr, c_tr = embed_dataset(
+            oracle, train_loader.dataset, num_workers=ref_cfg.num_workers
+        )
+        if args.zs_cutoff == "gmm":
+            cutoffs = fit_zeroshot_cutoffs(oracle, prompt_pairs, v_tr)
+            print(f"  fitted zero-shot cutoffs (unlabeled train): {cutoffs}")
+        if need_eraser:
+            fit_w = None
+            if args.eraser_fit == "balanced":
+                c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
+                fit_w = group_weights(y_tr, c_fit)
+            eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
+            if core_file:
+                core = (
+                    load_core_dirs(args.core_dirs)
+                    if args.core_dirs
+                    else prompt_directions(oracle, load_prompt_file(args.core_prompts))
+                )
+                core_eraser = fit_leace_eraser(
+                    v_tr, torch.cat([subspace.float().cpu(), core]), weights=fit_w
+                )
+                print(f"  {len(core)} core direction(s) from {core_file}")
+            print(
+                f"  fitted whitened eraser on {len(v_tr):,} train embeddings "
+                f"({args.eraser_fit})"
+            )
+        if args.group_reweight == "pseudo" or args.group_dro == "pseudo":
+            c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
+            print(
+                "  zero-shot concept accuracy on train (reported only, not used): "
+                f"{(c_hat == c_tr).float().mean():.4f}"
+            )
+        if args.group_reweight == "pseudo":
+            train_weights = group_weights(y_tr, c_hat)
+        elif args.group_reweight == "oracle":
+            train_weights = group_weights(y_tr, c_tr)
+        elif args.group_reweight == "propensity":
+            z_tr = whitened_concept_scores(v_tr, eraser)
+            train_weights = propensity_weights(y_tr, z_tr)
+        train_groups = dro_groups(args, y_tr, c_tr, c_hat)
+    if args.error_set:
+        train_weights = error_set_weights(args.error_set, args.upweight)
+
+    val_pseudo = zeroshot_concept_codes(oracle, prompt_pairs, v_va, cutoffs)
+    print(
+        "  zero-shot concept accuracy on val (reported only, not used): "
+        f"{(val_pseudo == c_va).float().mean():.4f}"
+    )
 
     # ── Ablation grid ─────────────────────────────────────────────────────────
     all_results: List[dict] = []
@@ -273,8 +552,52 @@ def main():
                 device=device,
                 seed=seed,
                 concept_subspace_k=args.concept_subspace_k,
+                sequential_phase_switch_epoch=args.sequential_switch_epoch,
+                clip_model=args.clip_model,
+                clip_embed_dim=oracle.embed_dim,
+                proj_out_dim=oracle.embed_dim,
             )
             cfg.concept_attr = "place"
+            cfg.concept_prompts_pos, cfg.concept_prompts_neg = prompts_pos, prompts_neg
+            if custom_pairs:
+                cfg.prompt_pairs = [[list(p), list(n)] for p, n in prompt_pairs]
+            if args.extra_prompts:
+                cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
+            if args.prompts != "words":
+                cfg.run_name += f"_p{args.prompts}"
+            if args.clip_model != DebiasingConfig.clip_model:
+                cfg.run_name += "_enc-" + args.clip_model.split("/")[-1]
+            if args.no_lambda_schedules:
+                cfg = disable_lambda_schedules(cfg)
+            if args.scratch:
+                cfg = use_scratch_backbone(cfg)
+            if args.eraser == "leace":
+                cfg = use_leace_eraser(cfg)
+            if args.repulse != "orth":
+                cfg = use_whitened_repulse(cfg, args.repulse)
+            if args.align == "cka" and cfg.lambda_align > 0:
+                cfg.align = "cka"
+                cfg.run_name += "_acka"
+            if args.lambda_align is not None and cfg.lambda_align > 0:
+                cfg.lambda_align = args.lambda_align
+                cfg.run_name += f"_lal{args.lambda_align:g}"
+            if args.eraser_fit != "biased":
+                cfg.eraser_fit = args.eraser_fit
+                cfg.run_name += "_efbal"
+            if args.zs_cutoff != "zero":
+                cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
+                cfg.run_name += f"_zs{args.zs_cutoff}"
+            if args.lambda_repulse is not None and cfg.lambda_repulse > 0:
+                cfg.lambda_repulse = args.lambda_repulse
+                cfg.run_name += f"_lrep{args.lambda_repulse:g}"
+            if args.lambda_promote > 0 and run_name != "erm":
+                cfg.core_dirs, cfg.lambda_promote = core_file, args.lambda_promote
+                cfg.run_name += (
+                    "_core" if args.core_dirs else "_corep-" + Path(core_file).stem
+                ) + f"_lpro{args.lambda_promote:g}"
+            if args.group_reweight != "none":
+                cfg = use_group_reweighting(cfg, args.group_reweight)
+            cfg = apply_baseline_args(cfg, args)
 
             model = build_model(cfg, num_classes=2)
             n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -286,8 +609,27 @@ def main():
                 cfg=cfg,
                 oracle=None if is_erm else oracle,
                 subspace=None if is_erm else subspace,
+                eraser=None if is_erm else eraser,
+                val_pseudo_concepts=val_pseudo,
+                core_eraser=None if is_erm else core_eraser,
+                train_groups=train_groups,
+                n_train=len(train_loader.dataset),
             )
-            best_ckpt = trainer.fit(train_loader, val_loader)
+            base_loader = (
+                indexed_loader(train_loader)
+                if cfg.group_dro != "none" or cfg.bam_aux > 0
+                else train_loader
+            )
+            if cfg.n_folds > 0:
+                base_loader = fold_loader(
+                    base_loader, cfg.n_folds, cfg.fold, cfg.fold_seed
+                )
+            fit_loader = (
+                weighted_loader(base_loader, train_weights, seed=seed)
+                if train_weights is not None
+                else base_loader
+            )
+            best_ckpt = trainer.fit(fit_loader, val_loader)
 
             model.load_state_dict(torch.load(best_ckpt, map_location=device))
 
@@ -297,14 +639,15 @@ def main():
                 test_loader,
                 device,
                 cfg.amp,
-                label=f"{run_name}  seed={seed}",
+                label=f"{cfg.run_name}  seed={seed}",
             )
 
             row = {
-                "run_name": run_name,
+                "run_name": cfg.run_name,
                 "seed": seed,
                 "subspace_k": args.concept_subspace_k,
                 "run_dir": trainer.ckpt_dir,
+                "checkpoint": os.path.basename(best_ckpt),
                 **metrics,
             }
             all_results.append(row)

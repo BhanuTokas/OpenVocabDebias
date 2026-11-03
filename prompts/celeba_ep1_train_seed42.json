@@ -1,0 +1,12 @@
+{
+  "note": "Discovered without the val split: class-0 (non-blond) error direction of the main ERM ResNet-18 run (seed 42) at epoch_01.pt, errors on the train split (discover_biases.py --split train --prompted none; results_cf/celeba_resnet18/erm_ep1_train.json). |corr| with true Male 0.77 on train; |cos| 0.95 with the val direction. Review: dropped 'a road' and 'a photo of blond hair' (the target); class-1 direction rejected (hair colour = the target).",
+  "proposals": [
+    {
+      "name": "discovered_class0",
+      "pos": ["a man", "a boy", "an old man", "a beard"],
+      "neg": ["a woman", "a dress", "a girl", "a photo of makeup"],
+      "accept": true,
+      "class": 0
+    }
+  ]
+}
