@@ -1,0 +1,209 @@
+smiling mouth
+open mouth
+teeth showing
+closed lips
+red lipstick
+dark lipstick
+pale skin
+tanned skin
+dark skin
+makeup
+heavy eyeshadow
+eyeliner
+long eyelashes
+arched eyebrows
+thin eyebrows
+thick eyebrows
+blue eyes
+brown eyes
+green eyes
+eyeglasses
+sunglasses
+earrings
+necklace
+hat
+baseball cap
+headband
+hair clip
+scarf
+tie
+bow tie
+collar
+dress
+suit jacket
+t-shirt
+low neckline
+bare shoulders
+strapless gown
+jewelry
+female face
+male face
+young face
+older face
+wrinkles
+beard
+mustache
+stubble
+shaved face
+bald head
+receding hairline
+bangs
+long hair
+short hair
+curly hair
+straight hair
+wavy hair
+ponytail
+bun
+braids
+hair length
+hair parting
+hair shine
+hair highlights
+hair roots
+messy hair
+hair covering forehead
+hair over eyes
+sideburns
+rosy cheeks
+high cheekbones
+double chin
+round face
+oval face
+narrow face
+strong jawline
+pointy nose
+big nose
+small nose
+big lips
+dimples
+freckles
+moles
+facial scars
+tattoos
+piercings
+nose ring
+red carpet
+step and repeat backdrop
+sponsor logos
+event banner
+photographers
+crowd
+microphone
+stage
+spotlight
+flash glare
+studio lighting
+warm lighting
+cool lighting
+yellow tint
+overexposure
+underexposure
+high contrast
+low contrast
+shadows on face
+backlight
+sunlight
+lens flare
+blurry background
+sharp focus
+bokeh
+plain background
+white wall
+black background
+blue background
+green foliage
+trees
+sky
+beach
+sand
+ocean
+buildings
+city street
+indoor room
+curtains
+window
+door
+furniture
+sofa
+car
+microphone stand
+camera
+phone
+drinks
+glass of wine
+food
+flowers
+balloons
+confetti
+christmas lights
+sign text
+watermark
+timestamp
+magazine cover
+black and white
+sepia tone
+grainy image
+low resolution
+jpeg artifacts
+cropped face
+close-up
+head tilt
+profile view
+three-quarter view
+frontal view
+looking away
+eyes closed
+squinting
+laughing
+serious expression
+surprised look
+neutral expression
+raised eyebrows
+hand on face
+hand on hip
+arms crossed
+holding hands
+second person
+child
+baby
+couple
+group photo
+man in tuxedo
+woman in gown
+uniform
+sports jersey
+hoodie
+leather jacket
+fur coat
+sleeveless top
+cleavage
+neck
+shoulders
+visible ears
+forehead
+sunburn
+glossy skin
+airbrushed skin
+face paint
+costume
+wig
+mask
+veil
+turban
+helmet
+hijab
+sparkly sequins
+polka dots
+striped shirt
+floral pattern
+plaid pattern
+brown wooden panel
+gold decoration
+bright colours
+dark clothing
+white clothing
+pink clothing
+red clothing
+blue clothing
+black clothing

@@ -1,0 +1,479 @@
+grass
+sand
+snow
+water
+ocean
+lake
+river
+waterfall
+beach
+forest
+jungle
+desert
+mountain
+hill
+cliff
+cave
+sky
+blue sky
+clouds
+overcast sky
+sunset
+sunrise
+night sky
+stars
+moon
+sun glare
+fog
+mist
+rain
+snowfall
+rainbow
+lightning
+smoke
+fire
+flames
+ice
+frost
+mud
+dirt
+gravel
+rocks
+boulders
+pebbles
+flowers
+tree
+palm tree
+bushes
+leaves
+fallen leaves
+branches
+moss
+field
+meadow
+farmland
+orchard
+garden
+lawn
+park
+playground
+street
+road
+highway
+sidewalk
+crosswalk
+bridge
+tunnel
+alley
+parking lot
+intersection
+traffic light
+street sign
+road markings
+utility pole
+power lines
+fence
+wall
+brick wall
+concrete wall
+graffiti
+window
+glass
+door
+doorway
+stairs
+balcony
+roof
+chimney
+skyscraper
+house
+cottage
+apartment building
+church
+temple
+mosque
+castle
+tower
+barn
+shed
+warehouse
+factory
+construction site
+crane
+scaffolding
+indoor
+outdoor
+living room
+bedroom
+kitchen
+bathroom
+office
+classroom
+hospital room
+laboratory
+restaurant
+cafe
+bar
+shop
+supermarket
+shelves
+library
+bookshelf
+museum
+gallery
+stage
+stadium
+gym
+swimming pool
+airport
+train station
+bus stop
+subway
+car interior
+cockpit
+studio backdrop
+white background
+black background
+plain background
+blurry background
+cluttered background
+sofa
+chair
+table
+desk
+bed
+pillow
+blanket
+curtains
+carpet
+rug
+lamp
+mirror
+picture frame
+poster
+painting
+television
+computer
+laptop
+keyboard
+mouse
+monitor
+smartphone
+tablet
+camera
+tripod
+microphone
+headphones
+speaker
+remote control
+cable
+wires
+plug
+battery
+clock
+watch
+calendar
+book
+magazine
+newspaper
+paper
+notebook
+pen
+pencil
+envelope
+box
+cardboard
+bag
+backpack
+suitcase
+handbag
+basket
+bottle
+cup
+mug
+glass of water
+plate
+bowl
+fork
+knife
+spoon
+chopsticks
+tray
+pot
+pan
+oven
+refrigerator
+food
+bread
+fruit
+vegetables
+meat
+cake
+pizza
+coffee
+wine
+beer
+candle
+balloon
+gift
+flag
+banner
+text overlay
+watermark
+logo
+caption
+timestamp
+border
+frame edge
+black bars
+vignette
+lens flare
+motion blur
+noise
+grain
+low resolution
+pixelation
+jpeg artifacts
+overexposure
+underexposure
+high contrast
+low contrast
+saturated colors
+muted colors
+black and white
+sepia
+color cast
+warm tones
+cool tones
+flash
+harsh shadows
+soft light
+backlighting
+silhouette
+reflection
+shadow
+spotlight
+neon lights
+street lights
+indoor lighting
+daylight
+twilight
+fisheye lens
+wide angle
+close-up
+aerial view
+top-down view
+low angle
+tilted camera
+centered subject
+off-center subject
+cropped subject
+partial occlusion
+crowd
+group of people
+single person
+face
+profile view
+smiling face
+sunglasses
+glasses
+hat
+cap
+helmet
+hood
+scarf
+beard
+mustache
+long hair
+short hair
+bald head
+blond hair
+dark hair
+gray hair
+makeup
+lipstick
+earrings
+necklace
+tattoo
+skin tone
+wrinkles
+child
+baby
+elderly person
+woman
+man
+uniform
+suit
+tie
+dress
+t-shirt
+jacket
+coat
+jeans
+shorts
+sneakers
+boots
+gloves
+apron
+costume
+swimsuit
+red clothing
+white clothing
+black clothing
+striped clothing
+patterned clothing
+hands
+fingers
+pointing
+holding object
+waving
+sitting
+standing
+walking
+running
+jumping
+dancing
+riding
+lying down
+hugging
+eating
+talking
+playing
+working
+carrying
+dog
+cat
+bird
+horse
+cow
+sheep
+fish
+insect
+butterfly
+snake
+elephant
+zoo animal
+wild animal
+pet
+leash
+cage
+saddle
+collar
+car
+truck
+bus
+motorcycle
+bicycle
+scooter
+train
+tram
+airplane
+helicopter
+boat
+ship
+sail
+tractor
+ambulance
+police car
+taxi
+license plate
+wheels
+tires
+headlights
+windshield
+sports equipment
+ball
+bat
+racket
+goal
+net
+skis
+surfboard
+skateboard
+fishing rod
+musical instrument
+guitar
+piano
+drum
+tools
+hammer
+ladder
+rope
+chain
+machinery
+medical equipment
+x-ray
+microscope
+screen display
+chart
+diagram
+map
+sign
+text
+numbers
+handwriting
+barcode
+qr code
+icon
+cartoon
+drawing
+sketch
+illustration
+3d render
+sculpture
+toy
+doll
+stuffed animal
+puzzle
+game board
+costume mask
+medical mask
+bandage
+stethoscope
+crown
+trophy
+medal
+jewelry
+fabric texture
+wood grain
+metal surface
+plastic
+leather
+stone texture
+tile pattern
+checkered pattern
+polka dots
+stripes
+grid lines
+dust
+scratches
+stains
+water droplets
+condensation
+cracks
+rust
+dirt on lens
+fingerprints
+tape
+sticker
+label
+price tag
+ruler
+scale bar
+arrow
+circle annotation
+bounding box
+image border
+collage
+split screen
+mirror image
+repeated pattern
+tiny subject
+large subject
+empty space
+busy scene
+symmetry
+horizon line
+diagonal lines
+shallow depth of field
+sharp focus

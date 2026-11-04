@@ -1,0 +1,212 @@
+water surface
+lake shore
+sandy beach
+muddy bank
+wet mud
+pebbles
+rocks
+boulder
+driftwood
+fallen log
+tree branch
+bare twig
+thin perch
+leafy branch
+pine needles
+evergreen tree
+tree trunk
+bark texture
+green leaves
+autumn leaves
+dead leaves
+flowers
+blossoms
+berries
+fruit
+seed head
+tall grass
+dry grass
+reeds
+cattails
+marsh vegetation
+lily pads
+seaweed
+shrubs
+bushes
+moss
+lichen
+dirt ground
+gravel
+snow
+ice
+frost
+fog
+rain drops
+blue sky
+cloudy sky
+overcast sky
+sunset glow
+sunrise light
+bright sunlight
+deep shadow
+dappled light
+backlighting
+silhouette
+blurred background
+bokeh
+green background
+brown background
+white background
+gray background
+dark background
+sharp focus
+motion blur
+grainy noise
+high contrast
+low light
+overexposed highlights
+washed out colors
+saturated colors
+color cast
+vignette
+image border
+watermark
+photographer signature
+text overlay
+timestamp
+camera lens flare
+telephoto compression
+close-up framing
+wide shot
+centered subject
+bird in flight
+spread wings
+perched posture
+bird on water
+bird on ground
+bird on wire
+power line
+utility pole
+fence post
+wooden fence
+barbed wire
+metal railing
+bird feeder
+birdhouse
+nest
+eggs
+chicks
+bird bath
+human hand
+person
+binoculars
+camera equipment
+tripod
+boat
+dock
+pier
+buoy
+rope
+fishing net
+building
+roof
+window
+brick wall
+concrete
+asphalt road
+car
+bridge
+sign
+cage
+zoo enclosure
+glass reflection
+water reflection
+ripples
+waves
+foam
+splash
+water droplets
+mist
+rock cliff
+sand dunes
+desert scrub
+mountain
+hillside
+open field
+farmland
+forest floor
+canopy
+jungle foliage
+tropical plants
+palm tree
+cactus
+wetland
+mudflat
+tide pool
+shoreline
+other birds
+flock
+bird shadow
+insects
+fish in beak
+worm
+prey in beak
+seeds
+nuts
+bread crumbs
+feathers on ground
+open beak
+bird eye
+eye ring
+beak color
+leg color
+feet
+claws
+head crest
+breast spots
+wing bars
+tail feathers
+belly color
+back color
+throat patch
+bird size in frame
+bird pose
+head turned
+bird silhouette
+dark plumage
+white plumage
+yellow patch
+red patch
+blue tint
+green tint
+warm tones
+cool tones
+orange light
+golden hour
+twilight
+night flash
+shaded area
+sun glare
+leaf shadow
+cluttered background
+plain background
+horizon line
+tree line
+distant hills
+clouds at dusk
+sky gradient
+vertical branches
+horizontal branches
+thorns
+vines
+ivy
+fern
+wildflowers
+puddle
+footprints
+tire tracks
+litter
+plastic debris
+tag band
+leg band
+radio collar

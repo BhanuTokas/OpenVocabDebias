@@ -1,0 +1,193 @@
+smiling mouth
+open mouth
+teeth showing
+closed lips
+red lipstick
+dark lipstick
+pale skin
+tanned skin
+dark skin
+wrinkles
+smooth skin
+heavy makeup
+eye shadow
+eyeliner
+mascara
+long eyelashes
+arched eyebrows
+thick eyebrows
+thin eyebrows
+blue eyes
+brown eyes
+green eyes
+eyeglasses
+sunglasses
+earrings
+necklace
+hat
+baseball cap
+headband
+hair clip
+scarf
+bow tie
+necktie
+suit jacket
+collared shirt
+dress
+low neckline
+bare shoulders
+strapless top
+sleeveless dress
+black clothing
+white clothing
+red dress
+bright clothing
+sequins
+beard
+mustache
+stubble
+goatee
+sideburns
+bald head
+receding hairline
+bangs
+long hair
+short hair
+curly hair
+straight hair
+wavy hair
+ponytail
+updo
+bun
+braids
+hair highlights
+dark roots
+hair shine
+hair part
+bright lighting
+camera flash
+harsh shadows
+soft lighting
+backlighting
+overexposure
+low contrast
+warm tones
+cool tones
+golden light
+red carpet
+step-and-repeat banner
+sponsor logos
+event backdrop
+press wall
+photographers
+microphone
+stage
+spotlight
+blurred background
+dark background
+white background
+curtains
+crowd
+other people
+audience
+paparazzi
+cameras
+flowers
+trees
+sky
+indoor setting
+outdoor setting
+building
+window
+door
+wall
+furniture
+sofa
+car
+street
+sunlight
+sun glare
+lens flare
+film grain
+low resolution
+motion blur
+sharp focus
+shallow depth
+vignette
+black and white
+sepia tone
+color cast
+face tilt
+profile view
+frontal view
+three-quarter view
+looking away
+eyes closed
+raised eyebrows
+squinting
+laughing
+serious expression
+head tilted
+chin up
+hand on face
+hand on hip
+arms crossed
+holding glass
+holding phone
+holding award
+trophy
+champagne
+microphone stand
+female face
+male face
+young face
+older face
+child
+double chin
+round face
+oval face
+narrow face
+high cheekbones
+rosy cheeks
+blush
+freckles
+moles
+big nose
+pointed nose
+nose ring
+lip piercing
+tattoo
+facial scars
+shiny forehead
+forehead visible
+ears visible
+neck visible
+collarbone
+shoulders
+cleavage
+jewelry
+watch
+rings
+bracelet
+brooch
+fur collar
+leather jacket
+denim
+turtleneck
+t-shirt
+uniform
+tuxedo
+gown
+veil
+costume
+wig
+text overlay
+watermark
+photo border
+image crop
+partial face
+face occlusion
+hair over eyes
+hair over shoulder
+shadow on face
+reflection

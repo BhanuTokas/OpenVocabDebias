@@ -8,6 +8,7 @@ from clip_debias.discovery import (
     as_prompt,
     direction_scores,
     error_directions,
+    load_vocabulary,
     residual_scores,
 )
 
@@ -63,3 +64,14 @@ def test_direction_scores_keep_a_bias_shared_by_both_classes():
     assert corr(residual_scores(v, None, dirs)[:, 1]) < 0.5  # a joint fit strips it
     z = direction_scores(v, None, dirs)
     assert corr(z[:, 0]) > 0.9 and corr(z[:, 1]) > 0.9
+
+
+def test_load_vocabulary_is_a_union_without_repeats(tmp_path):
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_text("water surface\n\nforest canopy\n")
+    b.write_text("forest canopy\nsandy beach\n")
+    assert load_vocabulary([str(a), str(b)]) == [
+        "water surface",
+        "forest canopy",
+        "sandy beach",
+    ]

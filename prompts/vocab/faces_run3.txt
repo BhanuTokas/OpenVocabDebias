@@ -1,0 +1,206 @@
+sunglasses
+eyeglasses
+hat
+baseball cap
+beanie
+headscarf
+hair band
+headband
+hair clip
+bangs
+long hair
+short hair
+curly hair
+straight hair
+wavy hair
+ponytail
+bun
+braids
+receding hairline
+bald head
+beard
+mustache
+stubble
+sideburns
+goatee
+smile
+open mouth
+teeth showing
+closed lips
+raised eyebrows
+squinting eyes
+frown
+laughing
+neutral expression
+red lipstick
+lip gloss
+heavy makeup
+eyeshadow
+eyeliner
+mascara
+blush
+arched eyebrows
+bushy eyebrows
+thin eyebrows
+fair skin
+tanned skin
+dark skin
+pale skin
+freckles
+wrinkles
+smooth skin
+rosy cheeks
+oval face
+round face
+high cheekbones
+big nose
+pointy nose
+narrow eyes
+double chin
+big lips
+earrings
+necklace
+pearl necklace
+necktie
+bow tie
+collared shirt
+suit jacket
+black dress
+strapless dress
+low neckline
+scarf
+turtleneck
+t-shirt
+bare shoulders
+leather jacket
+female face
+male face
+young woman
+older man
+child
+teenager
+elderly person
+red carpet
+step-and-repeat banner
+photographers
+microphone
+event backdrop
+sponsor logos
+stage
+curtain
+audience
+crowd
+other people
+two people
+group photo
+hugging
+holding hands
+holding glass
+champagne glass
+phone
+camera flash
+flash glare
+bright spotlight
+studio lighting
+warm lighting
+cool lighting
+soft lighting
+harsh shadows
+backlighting
+overexposed
+underexposed
+dark background
+white background
+blue background
+black background
+blurry background
+bokeh lights
+outdoor scene
+indoor room
+building
+window
+trees
+blue sky
+sunlight
+beach
+wall
+brick wall
+plain wall
+red background
+green background
+yellow background
+pink clothing
+white clothing
+red clothing
+blue clothing
+black clothing
+green clothing
+yellow clothing
+beige clothing
+gold jewelry
+sequins
+lace
+fur collar
+glitter
+hair highlights
+hair roots
+dark roots
+hair shine
+hair frizz
+hair parting
+side part
+center part
+hair covering forehead
+hair over eyes
+hair behind ears
+hair over shoulders
+tucked hair
+tilted head
+head turned
+profile view
+three-quarter view
+frontal view
+close-up face
+full body
+upper body
+low resolution
+grainy image
+motion blur
+black and white
+sepia tone
+saturated colors
+faded colors
+vintage photo
+watermark
+text overlay
+logo
+magazine cover
+film still
+television screen
+award trophy
+podium
+guitar
+musical instrument
+sports uniform
+helmet
+military uniform
+medical mask
+tattoo
+piercing
+nose ring
+lip piercing
+shaved sides
+facial hair stubble
+hand on face
+hand in hair
+chin resting hand
+shoulder strap
+bare neck
+neckline skin
+cleavage
+car interior
+seatbelt
+microphone stand
+bokeh background
+skin tone
+face shape

@@ -1,0 +1,198 @@
+water surface
+lake shore
+sandy beach
+muddy bank
+tall grass
+reeds
+cattails
+marsh
+wetland
+mudflat
+rocky shore
+pebbles
+driftwood
+fallen log
+tree branch
+bare twig
+leafy branch
+pine needles
+dense foliage
+green leaves
+autumn leaves
+fallen leaves
+flowers
+blossoms
+berries
+fruit tree
+tree trunk
+tree bark
+forest canopy
+forest floor
+open field
+meadow
+farmland
+fence post
+barbed wire
+wooden fence
+power line
+telephone pole
+utility wire
+rooftop
+chimney
+building wall
+brick wall
+window
+birdhouse
+bird feeder
+seed feeder
+hummingbird feeder
+bird bath
+garden
+lawn
+shrub
+hedge
+cactus
+desert sand
+dry grass
+snow
+ice
+frost
+rain drops
+fog
+mist
+overcast sky
+blue sky
+clouds
+sunset sky
+sunrise glow
+golden light
+backlighting
+silhouette
+harsh shadows
+dappled light
+motion blur
+shallow depth of field
+blurred background
+bokeh
+out of focus
+grainy image
+overexposed
+dark background
+bright background
+green background
+blue background
+brown background
+white background
+gray background
+cluttered background
+plain background
+sky background
+water reflection
+ripples
+waves
+ocean
+seaweed
+shells
+boat
+dock
+pier
+buoy
+rope
+net
+cage
+zoo enclosure
+hand
+person
+photographer
+child
+binoculars
+camera lens
+tripod
+ring on leg
+leg band
+tag
+nest
+eggs
+chicks
+twigs in beak
+worm
+insect
+fish in beak
+seeds
+nuts
+carrion
+flock
+group of birds
+flying birds
+bird in flight
+spread wings
+perched bird
+bird on ground
+bird on wire
+bird in water
+bird on branch
+bird on rock
+bird on post
+bird on feeder
+side view
+front view
+back view
+head close-up
+tail feathers
+wing tips
+feather texture
+open beak
+closed beak
+bird eye
+bird feet
+talons
+head turned
+bird silhouette
+distant bird
+small bird in frame
+centered subject
+cropped bird
+partial occlusion
+bird behind leaves
+watermark
+text overlay
+copyright mark
+black border
+image frame
+vignette
+saturated colors
+black and white
+high contrast
+low light
+flash glare
+specular highlight
+tree stump
+rock
+boulder
+cliff
+mountain
+hill
+road
+car
+sign
+street
+city
+park bench
+statue
+trash
+flag
+lamp
+snow-covered branch
+moss
+lichen
+vines
+thorn bush
+bamboo
+palm tree
+pond
+stream
+waterfall
+puddle
+dirt ground
+gravel
+concrete

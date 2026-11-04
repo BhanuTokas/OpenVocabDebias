@@ -1,0 +1,201 @@
+water surface
+lake shore
+muddy bank
+sandy beach
+pebbles
+rocks
+mossy rock
+driftwood
+fallen log
+tree branch
+thin twig
+bare branch
+leafy branch
+pine needles
+green leaves
+autumn leaves
+dead leaves
+flowers
+flower petals
+berries
+red berries
+seed head
+thistle
+reeds
+cattails
+tall grass
+dry grass
+short lawn
+meadow
+wildflowers
+bushes
+shrub
+dense foliage
+tree trunk
+bark texture
+forest canopy
+forest floor
+tree hollow
+nest
+nest eggs
+twigs nest
+bird house
+nest box
+bird feeder
+seed feeder
+suet cage
+hummingbird feeder
+bird bath
+fence post
+wooden fence
+barbed wire
+wire fence
+power line
+telephone pole
+utility wire
+metal pole
+rooftop
+roof tiles
+chimney
+building wall
+brick wall
+window
+window glass
+balcony railing
+wooden deck
+concrete ledge
+pavement
+road
+gravel path
+dirt ground
+snow
+snowy ground
+ice
+frost
+rain drops
+fog
+mist
+overcast sky
+blue sky
+clouds
+sunset sky
+sunrise glow
+sun glare
+backlit silhouette
+dark shadow
+dappled light
+harsh sunlight
+dusk lighting
+night flash
+blurred background
+bokeh
+shallow depth
+sharp focus
+motion blur
+grainy noise
+low resolution
+high contrast
+washed out colors
+saturated colors
+warm tone
+cool tone
+black and white
+vignette
+lens flare
+watermark
+photographer signature
+text overlay
+date stamp
+border frame
+camera strap
+person
+human hand
+banded leg
+leg band
+tracking tag
+wing tag
+radio collar
+binoculars
+spotting scope
+tripod
+camera lens
+boat
+dock
+buoy
+fishing line
+net
+cage
+zoo enclosure
+glass enclosure
+wire mesh
+perch
+wooden stick
+rope
+feather on ground
+fallen feathers
+insect
+caterpillar
+worm in beak
+fish in beak
+seed in beak
+food in beak
+prey
+flying insect
+dragonfly
+butterfly
+other birds
+flock
+flock in sky
+bird pair
+chicks
+open beak
+beak shape
+eye ring
+open wings
+spread wings
+wing tips
+tail feathers
+bird in flight
+perched pose
+head turned
+bird profile
+bird from behind
+bird from above
+close-up head
+distant bird
+small bird in frame
+bird at center
+bird at edge
+cropped bird
+bird partly hidden
+bird behind branch
+bird reflection
+wet plumage
+puffed feathers
+ground dust
+mud puddle
+shallow pond
+marsh
+mudflat
+seaweed
+ocean waves
+sea foam
+cliff
+mountain
+hillside
+desert sand
+cactus
+palm tree
+tropical foliage
+snow-covered branch
+orange sky
+distant trees
+horizon line
+urban background
+parked car
+street lamp
+sign post
+garden
+potted plant
+grass stems
+tree shadow

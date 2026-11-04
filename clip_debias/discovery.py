@@ -182,6 +182,15 @@ def vocabulary(objects: bool = False) -> List[str]:
     return list(dict.fromkeys(vocab))
 
 
+def load_vocabulary(paths: List[str]) -> List[str]:
+    """Union of one-phrase-per-line files, in order, without repeats."""
+    phrases: List[str] = []
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            phrases += [line.strip() for line in f if line.strip()]
+    return list(dict.fromkeys(phrases))
+
+
 def as_prompt(phrase: str) -> str:
     return (
         phrase if phrase.startswith(("a ", "an ", "the ")) else f"a photo of {phrase}"

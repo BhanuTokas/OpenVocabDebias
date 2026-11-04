@@ -1,0 +1,447 @@
+grass
+sand
+snow
+water
+ocean
+lake
+river
+waterfall
+sky
+blue sky
+clouds
+overcast sky
+sunset
+sunrise
+night sky
+stars
+moon
+sun glare
+rainbow
+fog
+mist
+rain
+puddle
+ice
+mountain
+hill
+valley
+cliff
+rocks
+boulder
+pebbles
+desert
+dunes
+forest
+tree
+palm tree
+pine tree
+bare branches
+leaves
+autumn leaves
+flowers
+flower bed
+bush
+hedge
+moss
+mud
+dirt
+gravel
+soil
+field
+meadow
+farmland
+crops
+beach
+shoreline
+waves
+cave
+swamp
+island
+horizon
+building
+skyscraper
+house
+cottage
+barn
+church
+temple
+castle
+tower
+bridge
+fence
+wall
+brick wall
+concrete
+graffiti
+window
+door
+doorway
+balcony
+roof
+chimney
+stairs
+ladder
+road
+highway
+sidewalk
+crosswalk
+road marking
+street sign
+traffic light
+stop sign
+billboard
+lamp post
+power line
+telephone pole
+parking lot
+alley
+railway
+train track
+platform
+airport
+runway
+dock
+harbor
+car
+truck
+bus
+bicycle
+motorcycle
+boat
+sailboat
+ship
+airplane
+helicopter
+train
+tractor
+wheel
+license plate
+headlights
+person
+crowd
+face
+hands
+hair
+beard
+glasses
+sunglasses
+hat
+helmet
+uniform
+suit
+dress
+jacket
+scarf
+gloves
+backpack
+handbag
+jewelry
+watermark
+tattoo
+makeup
+smile
+child
+baby
+elderly person
+silhouette
+shadow
+reflection
+mirror
+pose
+dark skin
+light skin
+red clothing
+blue clothing
+white clothing
+black clothing
+camouflage
+dog
+cat
+bird
+horse
+cow
+sheep
+fish
+insect
+butterfly
+snake
+leash
+collar
+cage
+nest
+fur
+feathers
+scales
+table
+chair
+sofa
+bed
+desk
+shelf
+bookshelf
+cabinet
+curtain
+carpet
+rug
+floor
+tiles
+wooden floor
+ceiling
+lamp
+chandelier
+fireplace
+kitchen
+sink
+stove
+refrigerator
+plate
+bowl
+cup
+bottle
+glass
+fork
+knife
+spoon
+food
+bread
+fruit
+vegetables
+meat
+cake
+pizza
+coffee
+drink
+tablecloth
+bathroom
+toilet
+bathtub
+television
+computer
+laptop
+keyboard
+phone
+screen
+camera
+tripod
+microphone
+speaker
+cable
+book
+paper
+text
+letters
+numbers
+logo
+poster
+sign
+label
+barcode
+banner
+flag
+frame
+picture frame
+painting
+statue
+toy
+ball
+doll
+balloon
+candle
+clock
+umbrella
+tent
+sports field
+stadium
+court
+goal
+net
+racket
+skis
+surfboard
+playground
+swimming pool
+gym
+stage
+spotlight
+studio
+office
+classroom
+hospital
+laboratory
+factory
+warehouse
+construction site
+crane
+scaffolding
+shop
+market
+restaurant
+street scene
+urban background
+rural background
+indoor scene
+outdoor scene
+daytime
+nighttime
+dusk
+bright light
+dim light
+backlight
+harsh shadows
+flash
+lens flare
+overexposure
+underexposure
+high contrast
+low contrast
+grainy
+noise
+blur
+motion blur
+out of focus
+shallow depth
+sharp focus
+vignette
+black and white
+sepia
+saturated colors
+muted colors
+warm tones
+cool tones
+color cast
+red background
+green background
+blue background
+white background
+black background
+gray background
+plain background
+cluttered background
+patterned background
+gradient background
+border
+black bars
+letterbox
+frame edge
+watermark text
+caption
+timestamp
+date stamp
+copyright mark
+jpeg artifacts
+low resolution
+pixelation
+compression
+scan lines
+film grain
+halftone
+cartoon
+illustration
+sketch
+drawing
+cgi
+render
+screenshot
+collage
+close-up
+wide shot
+aerial view
+top-down view
+low angle
+high angle
+side view
+back view
+centered object
+off-center object
+cropped object
+partial occlusion
+small object
+large object
+multiple objects
+single object
+tilted horizon
+fisheye distortion
+symmetry
+repetition
+stripes
+dots
+checkerboard
+grid
+zigzag
+lines
+curves
+edges
+corners
+texture
+smooth surface
+rough surface
+metal
+plastic
+wood
+glass surface
+fabric
+leather
+rust
+dust
+smoke
+fire
+sparks
+steam
+explosion
+lights
+neon sign
+christmas lights
+fireworks
+holiday decoration
+snowman
+costume
+party
+wedding
+ceremony
+protest
+sports event
+concert
+parade
+accident
+debris
+trash
+litter
+garbage can
+recycling bin
+fence wire
+barbed wire
+rope
+chain
+pipe
+tools
+hammer
+machine
+engine
+gear
+medical equipment
+syringe
+x-ray
+microscope slide
+satellite imagery
+map
+diagram
+chart
+graph
+logo watermark
+price tag
+hand holding object
+person holding phone
+selfie
+group photo
+portrait
+family
+pet owner
+bystander
+shadow of photographer
+human presence
+no people
+empty scene
+tourist spot
+landmark
+monument
+souvenir

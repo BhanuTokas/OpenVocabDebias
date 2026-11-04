@@ -57,6 +57,7 @@ from clip_debias.baselines import split_indices
 from clip_debias.clip_oracle import (
     CLIPOracle,
     compute_multi_concept_subspace,
+    concept_margin,
     embed_dataset,
 )
 from clip_debias.config import get_concept_prompts
@@ -65,6 +66,7 @@ from clip_debias.discovery import (
     as_prompt,
     direction_scores,
     error_directions,
+    load_vocabulary,
     name_scores,
     vocabulary,
 )
@@ -94,6 +96,13 @@ def parse_args():
     p.add_argument("--celeba_root", default=None)
     p.add_argument(
         "--objects", action="store_true", help="add ImageNet classes to the vocabulary"
+    )
+    p.add_argument(
+        "--vocab_file",
+        nargs="+",
+        default=None,
+        help="one-phrase-per-line files whose union replaces the built-in "
+        "vocabulary (e.g. prompts/vocab/); see also --objects",
     )
     p.add_argument("--n_phrases", type=int, default=5)
     p.add_argument("--out", default="proposals.json")
@@ -201,7 +210,12 @@ def main():
 
     dirs, classes = error_directions(v[covered], y[covered], err[covered])
     z = direction_scores(v, S, dirs)
-    vocab = vocabulary(objects=args.objects)
+    vocab = (
+        load_vocabulary(args.vocab_file)
+        if args.vocab_file
+        else vocabulary(objects=args.objects)
+    )
+    print(f"  vocabulary: {len(vocab)} phrases")
     proposals = []
     for j, k in enumerate(classes):
         pos, neg = name_scores(oracle, vocab, v, z[:, j], n=args.n_phrases)
@@ -235,6 +249,14 @@ def main():
             print(
                 "    (analysis) corr with true "
                 + "  ".join(f"{a} {t:+.2f}" for a, t in truth.items())
+            )
+            # how well the named phrases work as prompts, not just the direction
+            codes = concept_margin(oracle, entry["pos"], entry["neg"], v) > 0
+            acc = float((codes.numpy() == (c_true.numpy() & 1)).mean())
+            entry["prompt_acc"] = round(max(acc, 1 - acc), 3)
+            print(
+                f"    (analysis) prompts label true {names[0]} with accuracy "
+                f"{entry['prompt_acc']:.3f}"
             )
         proposals.append(entry)
 
