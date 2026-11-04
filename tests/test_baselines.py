@@ -1,10 +1,12 @@
 """GroupDRO weights and the K-fold split used for cross-fitted discovery."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import torch
 
-from clip_debias.baselines import GroupDROLoss, fold_indices
+from clip_debias.baselines import GroupDROLoss, fold_indices, split_indices
 
 
 def test_group_dro_upweights_the_worst_group_and_keeps_absent_ones():
@@ -49,3 +51,44 @@ def test_folds_depend_only_on_the_seed():
     assert not np.array_equal(
         fold_indices(100, 5, 2, seed=1), fold_indices(100, 5, 2, seed=2)
     )
+
+
+def run(mode, frac=0.8, seed=0, n_folds=0, fold=0):
+    return SimpleNamespace(
+        resample=mode,
+        resample_frac=frac,
+        resample_seed=seed,
+        n_folds=n_folds,
+        fold=fold,
+        fold_seed=0,
+    )
+
+
+@pytest.mark.parametrize("mode", ["subsample", "bootstrap"])
+def test_resampled_runs_train_on_the_same_total(mode):
+    keep, held = split_indices(1000, run(mode))
+    assert len(keep) == 800
+    assert not set(keep.tolist()) & set(held.tolist())
+    assert len(np.unique(keep)) + len(held) == 1000
+
+
+def test_subsample_has_no_repeats_and_holds_out_the_rest():
+    keep, held = split_indices(1000, run("subsample"))
+    assert len(np.unique(keep)) == 800 and len(held) == 200
+
+
+def test_bootstrap_repeats_and_holds_out_about_45_percent():
+    keep, held = split_indices(10000, run("bootstrap"))
+    assert 0.43 < len(held) / 10000 < 0.47  # exp(-0.8)
+    assert len(np.unique(keep)) < len(keep)
+
+
+def test_resample_depends_on_the_seed():
+    a = split_indices(1000, run("bootstrap", seed=0))[0]
+    assert not np.array_equal(a, split_indices(1000, run("bootstrap", seed=1))[0])
+
+
+def test_kfold_split_holds_out_the_fold():
+    keep, held = split_indices(100, run("", n_folds=5, fold=2))
+    assert np.array_equal(held, fold_indices(100, 5, 2, 0))
+    assert len(keep) == 80 and not set(keep.tolist()) & set(held.tolist())

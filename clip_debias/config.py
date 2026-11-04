@@ -324,6 +324,12 @@ class DebiasingConfig:
     # fold of a fold_seed permutation of train except `fold`, which
     # discover_biases.py then predicts (held-out errors without the val split).
     n_folds: int = 0
+    # Or a seeded random draw of resample_frac * n train examples ("subsample":
+    # without replacement, "bootstrap": with replacement); the examples never
+    # drawn are held out in the same way.
+    resample: str = ""
+    resample_frac: float = 0.8
+    resample_seed: int = 0
     fold: int = 0
     fold_seed: int = 0
 

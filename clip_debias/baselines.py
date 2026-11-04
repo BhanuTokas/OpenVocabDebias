@@ -87,14 +87,29 @@ def fold_indices(n: int, n_folds: int, fold: int, seed: int) -> np.ndarray:
     return np.sort(np.array_split(perm, n_folds)[fold])
 
 
-def fold_loader(loader: DataLoader, n_folds: int, fold: int, seed: int) -> DataLoader:
-    """Same batching as `loader` (shuffled), over the train examples outside
-    `fold` (fold_indices)."""
-    held = fold_indices(len(loader.dataset), n_folds, fold, seed)
-    keep = np.setdiff1d(np.arange(len(loader.dataset)), held)
+def resample_indices(n: int, mode: str, frac: float, seed: int) -> np.ndarray:
+    """round(frac * n) train indices, with repeats if mode is "bootstrap"."""
+    rng = np.random.default_rng(seed)
+    m = round(frac * n)
+    return rng.integers(n, size=m) if mode == "bootstrap" else rng.permutation(n)[:m]
+
+
+def split_indices(n: int, cfg) -> tuple[np.ndarray, np.ndarray]:
+    """(train indices, held-out indices) of a --n_folds or --resample run."""
+    if cfg.resample:
+        keep = resample_indices(n, cfg.resample, cfg.resample_frac, cfg.resample_seed)
+        return keep, np.setdiff1d(np.arange(n), keep)
+    held = fold_indices(n, cfg.n_folds, cfg.fold, cfg.fold_seed)
+    return np.setdiff1d(np.arange(n), held), held
+
+
+def fold_loader(loader: DataLoader, cfg) -> DataLoader:
+    """Same batching as `loader` (shuffled), over the train part of the run's
+    split (split_indices)."""
+    keep, held = split_indices(len(loader.dataset), cfg)
     print(
-        f"  fold {fold}/{n_folds} (split seed {seed}): training on {len(keep):,}, "
-        f"holding out {len(held):,} train examples"
+        f"  training on {len(keep):,} examples ({len(np.unique(keep)):,} distinct), "
+        f"holding out {len(held):,}"
     )
     return DataLoader(
         Subset(loader.dataset, keep.tolist()),
@@ -166,6 +181,16 @@ def add_baseline_args(parser) -> None:
     )
     g.add_argument("--fold", type=int, default=0)
     g.add_argument("--fold_seed", type=int, default=0)
+    g.add_argument(
+        "--resample",
+        default="",
+        choices=["", "subsample", "bootstrap"],
+        help="train on --resample_frac * n examples drawn without / with "
+        "replacement; the rest are held out for discover_biases.py. "
+        "Adds '_<mode><frac>r<seed>'.",
+    )
+    g.add_argument("--resample_frac", type=float, default=0.8)
+    g.add_argument("--resample_seed", type=int, default=0)
 
 
 def apply_baseline_args(cfg, args):
@@ -191,6 +216,12 @@ def apply_baseline_args(cfg, args):
             raise SystemExit(f"--fold must be in [0, {args.n_folds})")
         cfg.n_folds, cfg.fold, cfg.fold_seed = args.n_folds, args.fold, args.fold_seed
         cfg.run_name += f"_f{args.fold}of{args.n_folds}s{args.fold_seed}"
+    if args.resample:
+        if args.n_folds > 0:
+            raise SystemExit("pass only one of --n_folds and --resample")
+        cfg.resample, cfg.resample_frac = args.resample, args.resample_frac
+        cfg.resample_seed = args.resample_seed
+        cfg.run_name += f"_{args.resample}{args.resample_frac:g}r{args.resample_seed}"
     return cfg
 
 

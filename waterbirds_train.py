@@ -468,10 +468,12 @@ def main():
     c_hat = train_groups = None
     if args.error_set and args.group_reweight != "none":
         raise SystemExit("--error_set replaces --group_reweight; pass only one")
-    if args.n_folds > 0 and (
+    if (args.n_folds > 0 or args.resample) and (
         args.error_set or args.group_reweight != "none" or args.group_dro != "none"
     ):
-        raise SystemExit("--n_folds is for plain ERM / method runs without reweighting")
+        raise SystemExit(
+            "--n_folds / --resample are for plain ERM / method runs without reweighting"
+        )
     if (
         need_eraser
         or args.group_reweight != "none"
@@ -620,10 +622,8 @@ def main():
                 if cfg.group_dro != "none" or cfg.bam_aux > 0
                 else train_loader
             )
-            if cfg.n_folds > 0:
-                base_loader = fold_loader(
-                    base_loader, cfg.n_folds, cfg.fold, cfg.fold_seed
-                )
+            if cfg.n_folds > 0 or cfg.resample:
+                base_loader = fold_loader(base_loader, cfg)
             fit_loader = (
                 weighted_loader(base_loader, train_weights, seed=seed)
                 if train_weights is not None

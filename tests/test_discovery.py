@@ -4,7 +4,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from clip_debias.discovery import as_prompt, error_directions, residual_scores
+from clip_debias.discovery import (
+    as_prompt,
+    direction_scores,
+    error_directions,
+    residual_scores,
+)
 
 
 def planted(n=4000, D=32, seed=0):
@@ -48,3 +53,13 @@ def test_residual_scores_remove_the_prompted_concept():
 def test_as_prompt():
     assert as_prompt("a forest") == "a forest"
     assert as_prompt("makeup") == "a photo of makeup"
+
+
+def test_direction_scores_keep_a_bias_shared_by_both_classes():
+    v, y, err, b = planted()
+    dirs, _ = error_directions(v, y, err)  # both classes point along b
+    zb = (v @ b).numpy()
+    corr = lambda a: abs(np.corrcoef(a.numpy(), zb)[0, 1])
+    assert corr(residual_scores(v, None, dirs)[:, 1]) < 0.5  # a joint fit strips it
+    z = direction_scores(v, None, dirs)
+    assert corr(z[:, 0]) > 0.9 and corr(z[:, 1]) > 0.9

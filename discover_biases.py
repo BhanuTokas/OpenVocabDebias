@@ -17,10 +17,13 @@ target labels are used.  The errors come from (--split):
   val    the val split, which the model has not trained on (default)
   train  the train split without augmentation, so val is left for model
          selection only.  A converged model has nearly memorised train, so use
-         an early checkpoint (--ckpt epoch_01.pt), or cross-fit: pass the K run
-         directories of one K-fold split (training flags --n_folds K --fold k
-         --fold_seed s) and each train example is predicted by the run that
-         held it out.
+         an early checkpoint (--ckpt epoch_01.pt), or hold examples out: pass
+         the run directories of one scheme, either the K runs of a K-fold split
+         (training flags --n_folds K --fold k --fold_seed s) or any number of
+         resampled runs (--resample subsample|bootstrap --resample_frac f
+         --resample_seed r).  Each train example is predicted only by the runs
+         that held it out; it is an error if most of them get it wrong (a tie
+         is not), and examples no run held out are left out of the directions.
 The unit directions are also saved next to --out (<out stem>_dirs.npz) so the
 discoveries of different splits / seeds can be compared.
 
@@ -50,7 +53,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from clip_debias.baselines import fold_indices
+from clip_debias.baselines import split_indices
 from clip_debias.clip_oracle import (
     CLIPOracle,
     compute_multi_concept_subspace,
@@ -60,9 +63,9 @@ from clip_debias.config import get_concept_prompts
 from clip_debias.data import build_dataloaders
 from clip_debias.discovery import (
     as_prompt,
+    direction_scores,
     error_directions,
     name_scores,
-    residual_scores,
     vocabulary,
 )
 from clip_debias.evaluate import extract_features
@@ -141,36 +144,52 @@ def main():
         ds = train_eval_dataset(cfg, dataset)
     n = len(ds)
 
-    if len(runs) > 1 or cfg.n_folds > 0:
-        K, s = cfg.n_folds, cfg.fold_seed
+    held_out = cfg.n_folds > 0 or bool(cfg.resample)
+    if len(runs) > 1 or held_out:
+        scheme = (cfg.n_folds, cfg.fold_seed, cfg.resample, cfg.resample_frac)
+        K = cfg.n_folds
+        ids = [c.resample_seed if c.resample else c.fold for c, _ in runs]
         if (
             args.split != "train"
-            or K == 0
-            or any((c.n_folds, c.fold_seed) != (K, s) for c, _ in runs)
-            or sorted(c.fold for c, _ in runs) != list(range(K))
+            or not held_out
+            or any(
+                (c.n_folds, c.fold_seed, c.resample, c.resample_frac) != scheme
+                for c, _ in runs
+            )
+            or len(set(ids)) != len(ids)
+            or (K > 0 and sorted(ids) != list(range(K)))
         ):
             raise SystemExit(
-                "cross-fitting needs --split train and one run per fold 0..K-1 of "
-                "the same split (--n_folds K --fold k --fold_seed s)"
+                "held-out errors need --split train and the runs of one scheme: "
+                "every fold 0..K-1 of one split (--n_folds K --fold k --fold_seed s) "
+                "or distinct draws (--resample m --resample_frac f --resample_seed r)"
             )
-        y, err = np.zeros(n, int), np.zeros(n, bool)
+        y, wrong, votes = np.full(n, -1), np.zeros(n, int), np.zeros(n, int)
         for d, (c, _) in zip(args.run_dir, runs):
-            idx = fold_indices(n, K, c.fold, s)
-            y[idx], err[idx] = model_errors(d, c, ds, idx, args)
-        source = f"held-out train ({K} folds, split seed {s})"
+            idx = split_indices(n, c)[1]
+            y[idx], e = model_errors(d, c, ds, idx, args)
+            wrong[idx] += e
+            votes[idx] += 1
+        err, covered = 2 * wrong > votes, votes > 0
+        name = cfg.resample or f"{K}-fold"
+        source = (
+            f"held-out train ({name}, {len(runs)} runs, {covered.mean():.0%} of train)"
+        )
     else:
         y, err = model_errors(args.run_dir[0], cfg, ds, np.arange(n), args)
+        covered = np.ones(n, bool)
         source = args.split
     print(
-        f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: {source} error {err.mean():.3f}"
+        f"\n{cfg.run_name}  seed={cfg.seed}  {args.ckpt}: {source} error "
+        f"{err[covered].mean():.3f}"
     )
-    for k in np.unique(y):
-        print(
-            f"  class {k}: {int((err & (y == k)).sum())} errors / {int((y == k).sum())}"
-        )
+    for k in np.unique(y[covered]):
+        m = covered & (y == k)
+        print(f"  class {k}: {int((err & m).sum())} errors / {int(m.sum())}")
 
     oracle = CLIPOracle(cfg.clip_model, device=cfg.device)
-    v, _, c_true = embed_dataset(oracle, ds, num_workers=args.num_workers)
+    v, labels, c_true = embed_dataset(oracle, ds, num_workers=args.num_workers)
+    y_all = labels.numpy().astype(int)
     pairs = prompted_pairs(cfg, dataset) if args.prompted == "config" else []
     S = (
         compute_multi_concept_subspace(oracle, pairs, k=cfg.concept_subspace_k)
@@ -180,8 +199,8 @@ def main():
     if pairs:
         print(f"  removing {len(pairs)} prompted concept(s), subspace {tuple(S.shape)}")
 
-    dirs, classes = error_directions(v, y, err)
-    z = residual_scores(v, S, dirs)
+    dirs, classes = error_directions(v[covered], y[covered], err[covered])
+    z = direction_scores(v, S, dirs)
     vocab = vocabulary(objects=args.objects)
     proposals = []
     for j, k in enumerate(classes):
@@ -195,7 +214,7 @@ def main():
             scores=dict(
                 pos={p: round(s, 3) for p, s in pos},
                 neg={p: round(s, 3) for p, s in neg},
-                corr_y=round(float(np.corrcoef(z[:, j], y)[0, 1]), 3),
+                corr_y=round(float(np.corrcoef(z[:, j], y_all)[0, 1]), 3),
             ),
         )
         print(
@@ -221,6 +240,7 @@ def main():
 
     out = dict(
         run_dir=args.run_dir if len(args.run_dir) > 1 else args.run_dir[0],
+        coverage=round(float(covered.mean()), 4),
         split=args.split,
         ckpt=args.ckpt,
         clip_model=cfg.clip_model,
@@ -234,7 +254,7 @@ def main():
         os.path.splitext(args.out)[0] + "_dirs.npz",
         dirs=dirs.numpy(),
         classes=np.array(classes),
-        n_errors=np.array([int((err & (y == k)).sum()) for k in classes]),
+        n_errors=np.array([int((err & covered & (y == k)).sum()) for k in classes]),
     )
     print(
         f'\nProposals written to {args.out}: review, edit, set "accept": true, '

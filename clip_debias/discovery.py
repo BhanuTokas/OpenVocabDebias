@@ -200,6 +200,8 @@ def error_directions(
             continue
         dirs.append(v[m & err].mean(0) - v[m & ~err].mean(0))
         classes.append(int(k))
+    if not dirs:
+        raise SystemExit(f"no class has {min_errors} errors and {min_errors} correct")
     return F.normalize(torch.stack(dirs).float(), dim=-1), classes
 
 
@@ -212,6 +214,15 @@ def residual_scores(
     r = 0 if prompted is None else prompted.shape[0]
     basis = dirs if prompted is None else torch.cat([prompted.float().cpu(), dirs])
     return whitened_concept_scores(v, fit_leace_eraser(v, basis))[:, r:]
+
+
+def direction_scores(
+    v: torch.Tensor, prompted: torch.Tensor | None, dirs: torch.Tensor
+) -> torch.Tensor:
+    """(N, m) residual_scores of each direction on its own.  One joint fit over
+    `dirs` would score a later class's direction only on what earlier classes do
+    not explain, and the classes' directions are usually the same bias."""
+    return torch.cat([residual_scores(v, prompted, d[None]) for d in dirs], dim=1)
 
 
 @torch.no_grad()
