@@ -127,6 +127,21 @@ def prompted_pairs(cfg, dataset):
     ]
 
 
+def prompt_scores(codes, c, y):
+    """How well zero-shot codes label concept c.  Plain accuracy rewards labelling
+    the class wherever c correlates with y, so also average over (y, c) cells and
+    report the worst cell, in the code orientation with the better average."""
+    cells = [(y == a) & (c == b) for a in np.unique(y) for b in np.unique(c)]
+    acc = [float((codes[m] == c[m]).mean()) for m in cells]
+    if np.mean(acc) < 0.5:
+        codes, acc = ~codes, [1 - a for a in acc]
+    return dict(
+        prompt_acc=round(float((codes == c).mean()), 3),
+        prompt_bal=round(float(np.mean(acc)), 3),
+        prompt_worst=round(float(min(acc)), 3),
+    )
+
+
 def model_errors(run_dir, cfg, ds, idx, args):
     """(targets, error mask) of the run's --ckpt on ds[idx], in idx order."""
     model = build_model(cfg, num_classes=2)
@@ -263,11 +278,11 @@ def main():
             )
             # how well the named phrases work as prompts, not just the direction
             codes = concept_margin(oracle, entry["pos"], entry["neg"], v) > 0
-            acc = float((codes.numpy() == (c_true.numpy() & 1)).mean())
-            entry["prompt_acc"] = round(max(acc, 1 - acc), 3)
+            entry.update(prompt_scores(codes.numpy(), c_true.numpy() & 1, y_all))
             print(
-                f"    (analysis) prompts label true {names[0]} with accuracy "
-                f"{entry['prompt_acc']:.3f}"
+                f"    (analysis) prompts label true {names[0]}: accuracy "
+                f"{entry['prompt_acc']:.3f}, balanced over (class, concept) "
+                f"{entry['prompt_bal']:.3f}, worst cell {entry['prompt_worst']:.3f}"
             )
         proposals.append(entry)
 

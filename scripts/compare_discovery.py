@@ -44,7 +44,8 @@ def main():
             strip = lambda s: s.replace("a photo of ", "")
             print(
                 f"  {n:<{w}}  {n_err:6d} err  |corr| true {truth or '-':<14}  "
-                f"prompt acc {e.get('prompt_acc', float('nan')):.3f}  "
+                f"prompts bal {e.get('prompt_bal', float('nan')):.3f} "
+                f"worst {e.get('prompt_worst', float('nan')):.3f}  "
                 f"{', '.join(map(strip, e['pos'][:3]))}  <->  "
                 f"{', '.join(map(strip, e['neg'][:3]))}"
             )

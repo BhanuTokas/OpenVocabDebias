@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from discover_biases import prompt_scores
 from clip_debias.discovery import (
     as_prompt,
     direction_scores,
@@ -75,3 +76,14 @@ def test_load_vocabulary_is_a_union_without_repeats(tmp_path):
         "forest canopy",
         "sandy beach",
     ]
+
+
+def test_prompt_scores_do_not_reward_labelling_the_class():
+    # concept agrees with the class on 95% of examples, as in Waterbirds
+    y = np.array([0] * 95 + [0] * 5 + [1] * 5 + [1] * 95)
+    c = np.array([0] * 95 + [1] * 5 + [0] * 5 + [1] * 95)
+    s = prompt_scores(y.astype(bool), c.astype(bool).astype(int), y)
+    assert s["prompt_acc"] == 0.95
+    assert s["prompt_bal"] == 0.5 and s["prompt_worst"] == 0.0
+    good = prompt_scores(c.astype(bool), c, y)
+    assert good["prompt_bal"] == 1.0 and good["prompt_worst"] == 1.0
