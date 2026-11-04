@@ -1,6 +1,9 @@
 """DFR helpers on synthetic features, and the run-name patterns of the summary."""
 
 import re
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -70,3 +73,15 @@ def test_summary_only_reads_current_bam_runs(name, ok):
 def test_summary_jtt_pattern():
     assert re.match(JTT, "jtt_lr1e-5_up20").groups() == ("1e-5", "20")
     assert not re.match(JTT, "jtt_up20")
+
+
+def test_select_lines_reach_a_child_shell(tmp_path):
+    # submit_main.sh runs as a child of the shell that evals these lines, so
+    # plain assignments would not reach it
+    d = tmp_path / "results_x" / "wb_resnet18" / "jtt_lr1e-5_up20" / "seed_1"
+    d.mkdir(parents=True)
+    (d / "val_history.json").write_text('{"epochs": {"1": {"val_pseudo_wga": 0.5}}}')
+    script = Path(__file__).parent.parent / "scripts" / "summarize_main.py"
+    cmd = [sys.executable, str(script), "--root", "x", "--select"]
+    out = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "export JTT_LR_wb_resnet18=1e-5 JTT_UP_wb_resnet18=20"

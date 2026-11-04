@@ -122,10 +122,10 @@ def main():
             for fam, (best, _) in chosen.items():
                 if fam == "jtt":
                     lr, up = re.match(JTT, best).groups()
-                    print(f"JTT_LR_{tag}={lr} JTT_UP_{tag}={up}")
+                    print(f"export JTT_LR_{tag}={lr} JTT_UP_{tag}={up}")
                 else:
                     aux, up = re.match(BAM, best).groups()
-                    print(f"BAM_AUX_{tag}={aux} BAM_UP_{tag}={up}")
+                    print(f"export BAM_AUX_{tag}={aux} BAM_UP_{tag}={up}")
             continue
 
         print(f"\n== {tag}  (test, best_pseudo_wga.pt; mean ± sd over seeds)")
