@@ -104,6 +104,12 @@ def parse_args():
         help="one-phrase-per-line files whose union replaces the built-in "
         "vocabulary (e.g. prompts/vocab/); see also --objects",
     )
+    p.add_argument(
+        "--clip_cache",
+        default=None,
+        help="file holding the split's CLIP embeddings: read if it exists, else "
+        "written, so repeated calls on one split skip the CLIP image pass",
+    )
     p.add_argument("--n_phrases", type=int, default=5)
     p.add_argument("--out", default="proposals.json")
     p.add_argument("--report_truth", action="store_true")
@@ -197,7 +203,12 @@ def main():
         print(f"  class {k}: {int((err & m).sum())} errors / {int(m.sum())}")
 
     oracle = CLIPOracle(cfg.clip_model, device=cfg.device)
-    v, labels, c_true = embed_dataset(oracle, ds, num_workers=args.num_workers)
+    if args.clip_cache and os.path.isfile(args.clip_cache):
+        v, labels, c_true = torch.load(args.clip_cache)
+    else:
+        v, labels, c_true = embed_dataset(oracle, ds, num_workers=args.num_workers)
+        if args.clip_cache:
+            torch.save((v, labels, c_true), args.clip_cache)
     y_all = labels.numpy().astype(int)
     pairs = prompted_pairs(cfg, dataset) if args.prompted == "config" else []
     S = (

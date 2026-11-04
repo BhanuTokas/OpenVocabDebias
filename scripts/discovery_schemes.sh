@@ -35,8 +35,13 @@
 #                       scripts/compare_discovery.py per epoch
 #   DATASET wb | celeba,  BACKBONE resnet18 | resnet50,  CELEBA_ROOT for celeba
 #   SEED (training seed, 42), FRAC (0.8), EPOCHS (10), ROOT of the main ERM runs (main)
+#   VOCABS    lists to name every cell with (default builtin): any of builtin,
+#             described (prompts/vocab/ birds or faces, union of the runs),
+#             generic (union of the runs).  The train stage does not use it, so
+#             STAGE=discover can be rerun alone on finished runs.
 # Outputs: checkpoints_schemes/<tag>/ (epoch_01.pt and the last epoch only),
-#          results_schemes/<tag>/{ep1,last}_<scheme>.json
+#          results_schemes/<tag>/{ep1,last}_<scheme>.json (builtin),
+#          results_schemes/<tag>/<vocab>/ (the other lists)
 
 module purge
 export PATH="$HOME/.local/bin:$PATH"   # uv
@@ -97,7 +102,10 @@ if [ "$STAGE" = train ]; then
     done
 elif [ "$STAGE" = discover ]; then
     mkdir -p "$RES_BASE"
-    DISC=(--split train --prompted none --report_truth "${DATA_ARGS[@]}" --num_workers "$WORKERS")
+    BASE=$RES_BASE
+    [ "$DATASET" = wb ] && DESCRIBED=birds || DESCRIBED=faces
+    DISC0=(--split train --prompted none --report_truth "${DATA_ARGS[@]}" --num_workers "$WORKERS"
+           --clip_cache "$CKPT_BASE/clip_train.pt")
     dirs_of() {  # run labels -> their run dirs, or fail
         local l d
         for l in "$@"; do
@@ -106,6 +114,14 @@ elif [ "$STAGE" = discover ]; then
             echo "$d"
         done
     }
+    for VOCAB in ${VOCABS:-builtin}; do
+    case $VOCAB in
+        builtin)   RES_BASE=$BASE; DISC=("${DISC0[@]}") ;;
+        described) RES_BASE=$BASE/$VOCAB; DISC=("${DISC0[@]}" --vocab_file prompts/vocab/${DESCRIBED}_run?.txt) ;;
+        generic)   RES_BASE=$BASE/$VOCAB; DISC=("${DISC0[@]}" --vocab_file prompts/vocab/generic_run?.txt) ;;
+        *)         echo "unknown vocabulary $VOCAB" >&2; exit 1 ;;
+    esac
+    mkdir -p "$RES_BASE"
     for stage in ep1:epoch_01.pt "last:$LAST"; do
         NAME=${stage%:*}; CKPT=${stage#*:}
         OUTS=()
@@ -137,10 +153,11 @@ elif [ "$STAGE" = discover ]; then
                 echo "no epoch_01.pt of the main ERM run: skipping the in-sample reference" >&2
             fi
         fi
-        echo "== $NAME"
+        echo "== $VOCAB $NAME"
         if [ "${#OUTS[@]}" -gt 0 ]; then
             $RUN scripts/compare_discovery.py "${OUTS[@]}"
         fi
+    done
     done
 else
     echo "STAGE must be train or discover" >&2
