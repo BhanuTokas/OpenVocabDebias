@@ -37,7 +37,8 @@
 #   SEED (training seed, 42), FRAC (0.8), EPOCHS (10), ROOT of the main ERM runs (main)
 #   VOCABS    lists to name every cell with (default builtin): any of builtin,
 #             described (prompts/vocab/ birds or faces, union of the runs),
-#             generic (union of the runs).  The train stage does not use it, so
+#             generic (union of the runs), captions (results_captions/<tag>/vocab.txt
+#             from scripts/caption_vocab.sh).  The train stage does not use it, so
 #             STAGE=discover can be rerun alone on finished runs.
 # Outputs: checkpoints_schemes/<tag>/ (epoch_01.pt and the last epoch only),
 #          results_schemes/<tag>/{ep1,last}_<scheme>.json (builtin),
@@ -119,6 +120,10 @@ elif [ "$STAGE" = discover ]; then
         builtin)   RES_BASE=$BASE; DISC=("${DISC0[@]}") ;;
         described) RES_BASE=$BASE/$VOCAB; DISC=("${DISC0[@]}" --vocab_file prompts/vocab/${DESCRIBED}_run?.txt) ;;
         generic)   RES_BASE=$BASE/$VOCAB; DISC=("${DISC0[@]}" --vocab_file prompts/vocab/generic_run?.txt) ;;
+        captions)  RES_BASE=$BASE/$VOCAB
+                   CV=results_captions/${TAG}/vocab.txt
+                   [ -f "$CV" ] || { echo "no $CV: run scripts/caption_vocab.sh first" >&2; exit 1; }
+                   DISC=("${DISC0[@]}" --vocab_file "$CV") ;;
         *)         echo "unknown vocabulary $VOCAB" >&2; exit 1 ;;
     esac
     mkdir -p "$RES_BASE"

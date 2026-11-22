@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from build_caption_vocab import noun_phrases, pick
 from discover_biases import prompt_scores
 from clip_debias.discovery import (
     as_prompt,
@@ -87,3 +88,29 @@ def test_prompt_scores_do_not_reward_labelling_the_class():
     assert s["prompt_bal"] == 0.5 and s["prompt_worst"] == 0.0
     good = prompt_scores(c.astype(bool), c, y)
     assert good["prompt_bal"] == 1.0 and good["prompt_worst"] == 1.0
+
+
+def fake_tagger(words):
+    nouns = {"bird", "branch", "tree", "water", "lake", "woman", "dress"}
+    adjs = {"small", "tall", "blue", "red"}
+    return [(w, "NN" if w in nouns else "JJ" if w in adjs else "DT") for w in words]
+
+
+def test_noun_phrases_from_a_caption():
+    got = noun_phrases(
+        "A small bird sitting on a tall tree branch near blue water", fake_tagger
+    )
+    assert {"small bird", "tall tree branch", "blue water"} <= got
+    assert {"bird", "tree", "branch", "water"} <= got
+    assert not any(p.endswith(("small", "tall", "blue")) for p in got)
+
+
+def test_pick_takes_errors_and_as_many_correct_per_class():
+    y = np.array([0] * 50 + [1] * 50)
+    err = np.zeros(100, bool)
+    err[:5], err[50:80] = True, True
+    out = pick(y, err, per_class=10, rng=np.random.default_rng(0))
+    for k, n in ((0, 5), (1, 10)):
+        assert sum(1 for _, c, e in out if c == k and e) == n
+        assert sum(1 for _, c, e in out if c == k and not e) == n
+    assert all(err[i] == e for i, _, e in out)
