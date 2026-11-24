@@ -24,15 +24,23 @@ def main():
     runs = {}
     for f in a.files:
         d = np.load(os.path.splitext(f)[0] + "_dirs.npz")
-        props = {e["class"]: e for e in json.load(open(f))["proposals"]}
+        props = {
+            (e["class"], e.get("cluster", 0)): e
+            for e in json.load(open(f))["proposals"]
+        }
+        cl = d["clusters"] if "clusters" in d else np.zeros(len(d["classes"]), int)
         runs[os.path.basename(f)[:-5]] = {
-            int(k): (d["dirs"][i], int(d["n_errors"][i]), props[int(k)])
+            (int(k), int(cl[i])): (
+                d["dirs"][i],
+                int(d["n_errors"][i]),
+                props[(int(k), int(cl[i]))],
+            )
             for i, k in enumerate(d["classes"])
         }
     names = list(runs)
     w = max(len(n) for n in names)
     for k in sorted({k for r in runs.values() for k in r}):
-        print(f"\n== class {k}")
+        print(f"\n== class {k[0]}, cluster {k[1]}")
         for n in names:
             if k not in runs[n]:
                 print(f"  {n:<{w}}  (too few errors)")

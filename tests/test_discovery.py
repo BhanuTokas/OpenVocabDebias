@@ -9,7 +9,10 @@ from discover_biases import prompt_scores
 from clip_debias.discovery import (
     as_prompt,
     direction_scores,
+    cluster_error_directions,
     error_directions,
+    name_by_cosine,
+    remove_class_direction,
     load_vocabulary,
     residual_scores,
 )
@@ -114,3 +117,38 @@ def test_pick_takes_errors_and_as_many_correct_per_class():
         assert sum(1 for _, c, e in out if c == k and e) == n
         assert sum(1 for _, c, e in out if c == k and not e) == n
     assert all(err[i] == e for i, _, e in out)
+
+
+def test_clusters_split_two_biases_within_a_class():
+    g = torch.Generator().manual_seed(0)
+    D, n = 32, 3000
+    a, b = F.normalize(torch.randn(2, D, generator=g), dim=-1)
+    v = torch.randn(n, D, generator=g) * 0.1
+    y = np.zeros(n, int)
+    err = np.zeros(n, bool)
+    err[:150], err[150:300] = True, True
+    v[:150] += 2 * a  # errors of one kind
+    v[150:300] += 2 * b  # and of another
+    dirs, classes, ids, sizes = cluster_error_directions(v, y, err, max_k=3)
+    assert classes == [0, 0] and sorted(sizes) == [150, 150]
+    cos = (dirs @ torch.stack([a, b]).T).abs()
+    assert cos.max(dim=0).values.min() > 0.9
+    one, *_ = cluster_error_directions(v, y, err, max_k=1)
+    assert len(one) == 1
+
+
+def test_remove_class_direction_is_orthogonal_to_the_class_difference():
+    v, y, err, _ = planted()
+    dirs, _ = error_directions(v, y, err)
+    out = remove_class_direction(dirs, v, y)
+    c = F.normalize(v[y == 1].mean(0) - v[y == 0].mean(0), dim=0)
+    assert (out @ c).abs().max() < 1e-5
+    assert torch.allclose(out.norm(dim=1), torch.ones(len(out)))
+
+
+def test_name_by_cosine_ranks_by_text_similarity():
+    text = torch.eye(3)
+    pos, neg = name_by_cosine(
+        ["a", "b", "c"], text, torch.tensor([0.0, 1, 0]), n=1, center=False
+    )
+    assert pos[0][0] == "b" and neg[0][0] in {"a", "c"}

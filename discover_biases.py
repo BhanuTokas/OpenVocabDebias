@@ -58,14 +58,18 @@ from clip_debias.clip_oracle import (
     CLIPOracle,
     compute_multi_concept_subspace,
     concept_margin,
+    fit_zeroshot_cutoff,
     embed_dataset,
 )
 from clip_debias.config import get_concept_prompts
 from clip_debias.data import build_dataloaders
 from clip_debias.discovery import (
     as_prompt,
+    cluster_error_directions,
     direction_scores,
-    error_directions,
+    encode_vocab,
+    name_by_cosine,
+    remove_class_direction,
     load_vocabulary,
     name_scores,
     vocabulary,
@@ -110,6 +114,21 @@ def parse_args():
         help="file holding the split's CLIP embeddings: read if it exists, else "
         "written, so repeated calls on one split skip the CLIP image pass",
     )
+    p.add_argument(
+        "--clusters",
+        type=int,
+        default=1,
+        help="up to this many directions per class: k-means on the class's "
+        "error embeddings, k by silhouette (1 = one direction per class)",
+    )
+    p.add_argument("--min_cluster", type=int, default=10)
+    p.add_argument(
+        "--ablate",
+        action="store_true",
+        help="with --report_truth: also name and score each direction with the "
+        "text embeddings left uncentred, by text-cosine retrieval (centred and "
+        "not), and from a plain projection score instead of the whitened one",
+    )
     p.add_argument("--n_phrases", type=int, default=5)
     p.add_argument("--out", default="proposals.json")
     p.add_argument("--report_truth", action="store_true")
@@ -140,6 +159,33 @@ def prompt_scores(codes, c, y):
         prompt_bal=round(float(np.mean(acc)), 3),
         prompt_worst=round(float(min(acc)), 3),
     )
+
+
+def ablate(oracle, vocab, text, v, v_mean, z, d, c_true, y_all, args):
+    """Naming and scoring variants of one direction, each scored like the
+    main proposal (prompt_bal, prompt_worst)."""
+    proj = (v.float() - v_mean) @ d.float()  # plain projection, not whitened
+    named = dict(
+        corr_centred=name_scores(oracle, vocab, v, z, args.n_phrases, text, True),
+        corr_raw=name_scores(oracle, vocab, v, z, args.n_phrases, text, False),
+        cos_centred=name_by_cosine(vocab, text, d, args.n_phrases, True),
+        cos_raw=name_by_cosine(vocab, text, d, args.n_phrases, False),
+        corr_projection=name_scores(oracle, vocab, v, proj, args.n_phrases, text, True),
+    )
+    out, c = {}, c_true.numpy() & 1
+    for name, (pos, neg) in named.items():
+        pp, nn = [as_prompt(p) for p, _ in pos], [as_prompt(p) for p, _ in neg]
+        codes = (concept_margin(oracle, pp, nn, v) > 0).numpy()
+        s = prompt_scores(codes, c, y_all)
+        out[name] = dict(pos=pp, neg=nn, bal=s["prompt_bal"], worst=s["prompt_worst"])
+    for name, zz in (("dir_whitened", z), ("dir_projection", proj)):
+        s = prompt_scores((zz > fit_zeroshot_cutoff(zz.float())).numpy(), c, y_all)
+        out[name] = dict(bal=s["prompt_bal"], worst=s["prompt_worst"])
+    print(
+        "    (analysis) ablation bal/worst: "
+        + "  ".join(f"{k} {a['bal']:.3f}/{a['worst']:.3f}" for k, a in out.items())
+    )
+    return out
 
 
 def model_errors(run_dir, cfg, ds, idx, args):
@@ -234,23 +280,35 @@ def main():
     if pairs:
         print(f"  removing {len(pairs)} prompted concept(s), subspace {tuple(S.shape)}")
 
-    dirs, classes = error_directions(v[covered], y[covered], err[covered])
+    dirs, classes, cluster_ids, sizes = cluster_error_directions(
+        v[covered],
+        y[covered],
+        err[covered],
+        max_k=args.clusters,
+        min_size=args.min_cluster,
+    )
     z = direction_scores(v, S, dirs)
+    z_nc = direction_scores(v, S, remove_class_direction(dirs, v, y_all))
     vocab = (
         load_vocabulary(args.vocab_file)
         if args.vocab_file
         else vocabulary(objects=args.objects)
     )
     print(f"  vocabulary: {len(vocab)} phrases")
+    text = encode_vocab(oracle, vocab)
+    v_mean = v.float().mean(0)
     proposals = []
     for j, k in enumerate(classes):
-        pos, neg = name_scores(oracle, vocab, v, z[:, j], n=args.n_phrases)
+        pos, neg = name_scores(oracle, vocab, v, z[:, j], n=args.n_phrases, text=text)
         entry = dict(
-            name=f"discovered_class{k}",
+            name=f"discovered_class{k}"
+            + (f"_c{cluster_ids[j]}" if args.clusters > 1 else ""),
             pos=[as_prompt(p) for p, _ in pos],
             neg=[as_prompt(p) for p, _ in neg],
             accept=False,
             **{"class": k},
+            cluster=cluster_ids[j],
+            n_errors=sizes[j],
             scores=dict(
                 pos={p: round(s, 3) for p, s in pos},
                 neg={p: round(s, 3) for p, s in neg},
@@ -258,7 +316,8 @@ def main():
             ),
         )
         print(
-            f"\n  direction from class {k} errors   corr(score, y) {entry['scores']['corr_y']:+.2f}"
+            f"\n  direction from class {k} errors, cluster {cluster_ids[j]} "
+            f"({sizes[j]} errors)   corr(score, y) {entry['scores']['corr_y']:+.2f}"
         )
         print("    + " + ", ".join(f"{p} ({s:+.2f})" for p, s in pos))
         print("    − " + ", ".join(f"{p} ({s:+.2f})" for p, s in neg))
@@ -284,6 +343,29 @@ def main():
                 f"{entry['prompt_acc']:.3f}, balanced over (class, concept) "
                 f"{entry['prompt_bal']:.3f}, worst cell {entry['prompt_worst']:.3f}"
             )
+            # the direction itself as the pseudo-label, with and without the
+            # class difference, cut where a 2-component mixture splits it
+            for tag, zz in (("dir", z[:, j]), ("dir_noclass", z_nc[:, j])):
+                cut = fit_zeroshot_cutoff(zz.float())
+                s = prompt_scores((zz > cut).numpy(), c_true.numpy() & 1, y_all)
+                entry.update({k2.replace("prompt", tag): v2 for k2, v2 in s.items()})
+                print(
+                    f"    (analysis) {tag} scores label true {names[0]}: balanced "
+                    f"{entry[tag + '_bal']:.3f}, worst cell {entry[tag + '_worst']:.3f}"
+                )
+            if args.ablate:
+                entry["ablation"] = ablate(
+                    oracle,
+                    vocab,
+                    text,
+                    v,
+                    v_mean,
+                    z[:, j],
+                    dirs[j],
+                    c_true,
+                    y_all,
+                    args,
+                )
         proposals.append(entry)
 
     out = dict(
@@ -302,7 +384,8 @@ def main():
         os.path.splitext(args.out)[0] + "_dirs.npz",
         dirs=dirs.numpy(),
         classes=np.array(classes),
-        n_errors=np.array([int((err & covered & (y == k)).sum()) for k in classes]),
+        clusters=np.array(cluster_ids),
+        n_errors=np.array(sizes),
     )
     print(
         f'\nProposals written to {args.out}: review, edit, set "accept": true, '

@@ -35,6 +35,9 @@
 #                       scripts/compare_discovery.py per epoch
 #   DATASET wb | celeba,  BACKBONE resnet18 | resnet50,  CELEBA_ROOT for celeba
 #   SEED (training seed, 42), FRAC (0.8), EPOCHS (10), ROOT of the main ERM runs (main)
+#   CLUSTERS  up to this many directions per class (default 1; results go to
+#             results_schemes/<tag>/k<CLUSTERS>/ when above 1)
+#   ABLATE    1: also naming/scoring variants (discover_biases.py --ablate)
 #   VOCABS    lists to name every cell with (default builtin): any of builtin,
 #             described (prompts/vocab/ birds or faces, union of the runs),
 #             generic (union of the runs), captions (results_captions/<tag>/vocab.txt
@@ -106,7 +109,9 @@ elif [ "$STAGE" = discover ]; then
     BASE=$RES_BASE
     [ "$DATASET" = wb ] && DESCRIBED=birds || DESCRIBED=faces
     DISC0=(--split train --prompted none --report_truth "${DATA_ARGS[@]}" --num_workers "$WORKERS"
-           --clip_cache "$CKPT_BASE/clip_train.pt")
+           --clip_cache "$CKPT_BASE/clip_train.pt" --clusters "${CLUSTERS:-1}")
+    [ "${ABLATE:-0}" = 1 ] && DISC0+=(--ablate)
+    [ "${CLUSTERS:-1}" -gt 1 ] && BASE=$BASE/k${CLUSTERS}
     dirs_of() {  # run labels -> their run dirs, or fail
         local l d
         for l in "$@"; do

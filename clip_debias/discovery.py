@@ -214,6 +214,64 @@ def error_directions(
     return F.normalize(torch.stack(dirs).float(), dim=-1), classes
 
 
+def cluster_error_directions(
+    v: torch.Tensor,
+    y: np.ndarray,
+    err: np.ndarray,
+    max_k: int = 1,
+    min_size: int = 10,
+    min_errors: int = 5,
+    seed: int = 0,
+) -> Tuple[torch.Tensor, List[int], List[int], List[int]]:
+    """Several error directions per class: the class's errors are split by
+    k-means on their (unit) CLIP embeddings, k in 2..max_k picked by silhouette
+    score among splits whose clusters all have min_size errors (k = 1 when none
+    qualifies), and each cluster gives mean(cluster) − mean(correct).  Returns
+    unit directions (m, D) and, per direction, its class, cluster id and size.
+    max_k = 1 is error_directions."""
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+
+    dirs, classes, ids, sizes = [], [], [], []
+    for k in np.unique(y):
+        m = y == k
+        e, c = v[m & err].float(), v[m & ~err].float()
+        if len(e) < min_errors or len(c) < min_errors:
+            continue
+        labels = np.zeros(len(e), int)
+        x = F.normalize(e, dim=-1).numpy()
+        best = -1.0
+        for n in range(2, max_k + 1):
+            if len(e) < n * min_size:
+                break
+            lab = KMeans(n, n_init=10, random_state=seed).fit_predict(x)
+            if np.bincount(lab).min() < min_size:
+                continue
+            s = silhouette_score(x, lab)
+            if s > best:
+                best, labels = s, lab
+        mu_c = c.mean(0)
+        for j in range(labels.max() + 1):
+            dirs.append(e[labels == j].mean(0) - mu_c)
+            classes.append(int(k))
+            ids.append(j)
+            sizes.append(int((labels == j).sum()))
+    if not dirs:
+        raise SystemExit(f"no class has {min_errors} errors and {min_errors} correct")
+    return F.normalize(torch.stack(dirs), dim=-1), classes, ids, sizes
+
+
+def remove_class_direction(
+    dirs: torch.Tensor, v: torch.Tensor, y: np.ndarray
+) -> torch.Tensor:
+    """Directions with the between-class mean difference projected out.  An
+    error direction also points toward the other class, since misclassified
+    images look like it; this keeps only what is not the class itself."""
+    c = v[y == 1].float().mean(0) - v[y == 0].float().mean(0)
+    c = F.normalize(c, dim=0)
+    return F.normalize(dirs - (dirs @ c)[:, None] * c, dim=-1)
+
+
 def residual_scores(
     v: torch.Tensor, prompted: torch.Tensor | None, dirs: torch.Tensor
 ) -> torch.Tensor:
@@ -236,15 +294,44 @@ def direction_scores(
 
 @torch.no_grad()
 def name_scores(
-    oracle: CLIPOracle, vocab: List[str], v: torch.Tensor, z: torch.Tensor, n: int = 5
+    oracle: CLIPOracle,
+    vocab: List[str],
+    v: torch.Tensor,
+    z: torch.Tensor,
+    n: int = 5,
+    text: torch.Tensor | None = None,
+    center: bool = True,
 ) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
-    """Phrases whose (centred) zero-shot image scores correlate most positively
-    and most negatively with the score z (N,)."""
-    t = oracle.encode_text([as_prompt(p) for p in vocab]).float().cpu()
-    s = v.float() @ (t - t.mean(0)).T
+    """Phrases whose zero-shot image scores correlate most positively and most
+    negatively with the score z (N,).  The text embeddings are mean-centred over
+    the vocabulary first unless center=False; `text` reuses an encoding."""
+    t = text if text is not None else encode_vocab(oracle, vocab)
+    s = v.float() @ (t - t.mean(0) if center else t).T
     s = (s - s.mean(0)) / (s.std(0) + 1e-8)
     zz = (z.float() - z.float().mean()) / (z.float().std() + 1e-8)
     c = (s * zz[:, None]).mean(0).numpy()
+    order = np.argsort(-c)
+    pos = [(vocab[i], float(c[i])) for i in order[:n]]
+    neg = [(vocab[i], float(c[i])) for i in order[::-1][:n]]
+    return pos, neg
+
+
+def encode_vocab(oracle: CLIPOracle, vocab: List[str]) -> torch.Tensor:
+    return oracle.encode_text([as_prompt(p) for p in vocab]).float().cpu()
+
+
+def name_by_cosine(
+    vocab: List[str],
+    text: torch.Tensor,
+    d: torch.Tensor,
+    n: int = 5,
+    center: bool = True,
+) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
+    """Retrieval naming (as in DrawTheName): phrases whose text embedding has
+    the highest and lowest cosine with the direction d, after mean-centring the
+    vocabulary's embeddings unless center=False."""
+    t = F.normalize(text - text.mean(0) if center else text, dim=-1)
+    c = (t @ F.normalize(d.float(), dim=0)).numpy()
     order = np.argsort(-c)
     pos = [(vocab[i], float(c[i])) for i in order[:n]]
     neg = [(vocab[i], float(c[i])) for i in order[::-1][:n]]
