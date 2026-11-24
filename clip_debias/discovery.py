@@ -433,6 +433,16 @@ def core_directions(
     return torch.cat([pooled, d]), ["pooled"] + tags
 
 
+def load_direction_file(path: str, rows: List[int] | None = None) -> torch.Tensor:
+    """Orthonormal basis (r, D) of the error directions saved by
+    discover_biases.py (<out stem>_dirs.npz), optionally only some rows."""
+    d = torch.as_tensor(np.load(path)["dirs"]).float()
+    if rows:
+        d = d[rows]
+    q, _ = torch.linalg.qr(d.T)
+    return q.T.contiguous()
+
+
 def load_core_dirs(path: str) -> torch.Tensor:
     """Accepted core directions (r, D) from a discover_core.py file."""
     with open(path) as f:

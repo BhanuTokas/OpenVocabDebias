@@ -11,6 +11,7 @@ from clip_debias.discovery import (
     direction_scores,
     cluster_error_directions,
     error_directions,
+    load_direction_file,
     name_by_cosine,
     remove_class_direction,
     load_vocabulary,
@@ -152,3 +153,15 @@ def test_name_by_cosine_ranks_by_text_similarity():
         ["a", "b", "c"], text, torch.tensor([0.0, 1, 0]), n=1, center=False
     )
     assert pos[0][0] == "b" and neg[0][0] in {"a", "c"}
+
+
+def test_load_direction_file_is_orthonormal(tmp_path):
+    d = F.normalize(
+        torch.randn(3, 16, generator=torch.Generator().manual_seed(0)), dim=-1
+    )
+    f = tmp_path / "x_dirs.npz"
+    np.savez(f, dirs=d.numpy(), classes=np.array([0, 1, 1]))
+    q = load_direction_file(str(f))
+    assert torch.allclose(q @ q.T, torch.eye(3), atol=1e-5)
+    one = load_direction_file(str(f), rows=[1])
+    assert one.shape == (1, 16) and abs(float(one[0] @ d[1])) > 0.999

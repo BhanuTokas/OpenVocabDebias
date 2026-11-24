@@ -50,7 +50,7 @@ from clip_debias.config import (
     use_group_reweighting,
     get_concept_prompts,
 )
-from clip_debias.discovery import load_prompt_file
+from clip_debias.discovery import load_prompt_file, load_direction_file
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
@@ -155,6 +155,22 @@ def parse_args():
         "pairs are added as further concepts (subspace, eraser, pseudo-groups). "
         "Adds an '_xp-<file stem>' suffix.",
     )
+    parser.add_argument(
+        "--decor_dirs",
+        default=None,
+        help="error directions from discover_biases.py (<out>_dirs.npz) for the "
+        "decorrelation term: the whitened concept scores come from them instead "
+        "of (replace) or as well as (add) the prompt subspace.  Pseudo-groups "
+        "still come from the prompts.  Adds '_dd<mode>-<file stem>'.",
+    )
+    parser.add_argument(
+        "--decor_rows",
+        type=int,
+        nargs="+",
+        default=None,
+        help="rows of --decor_dirs to use (default: all)",
+    )
+    parser.add_argument("--decor_mode", default="replace", choices=["replace", "add"])
     parser.add_argument(
         "--extra_concept_attrs",
         nargs="*",
@@ -388,6 +404,16 @@ def main():
         oracle, prompt_pairs, k=args.concept_subspace_k
     )
     print(f"  subspace shape: {tuple(subspace.shape)}")
+    if args.decor_dirs:
+        dd = load_direction_file(args.decor_dirs, args.decor_rows)
+        if args.decor_mode == "add":
+            q, _ = torch.linalg.qr(torch.cat([subspace.float().cpu(), dd]).T)
+            dd = q.T.contiguous()
+        subspace = dd.to(subspace.dtype)
+        print(
+            f"  decorrelation subspace from {args.decor_dirs} ({args.decor_mode}): "
+            f"{tuple(subspace.shape)}"
+        )
 
     # ── Val pseudo-labels: label-free checkpoint selection (best_pseudo_wga.pt) ─
     print("\nEmbedding the val split with CLIP …")
@@ -496,6 +522,8 @@ def main():
                 cfg.run_name += "_pa-" + ("-".join(args.prompt_attrs) or "none")
             if args.extra_prompts:
                 cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
+            if args.decor_dirs:
+                cfg.run_name += f"_dd{args.decor_mode}-" + Path(args.decor_dirs).stem
             if args.zs_cutoff != "zero":
                 cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
                 cfg.run_name += f"_zs{args.zs_cutoff}"

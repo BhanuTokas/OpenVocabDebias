@@ -24,6 +24,10 @@
 #                   scripts/celeba_young_only.sh.
 #
 # PROMPTS  the reviewed proposals file (required)
+# DECOR_DIRS  optional discover_biases.py <out>_dirs.npz: the decorrelation term
+#          uses these error directions (DECOR_MODE replace, the default) or the
+#          prompt subspace plus them (add); DECOR_ROWS picks rows (e.g. "0").
+#          Pseudo-groups still come from PROMPTS.  Runs go to their own folder.
 #
 # Submit from the repo root:
 #   mkdir -p logs
@@ -53,8 +57,14 @@ read -ra SEEDS <<< "${SEEDS:-42 123 456}"   # override, e.g. SEEDS="789 1011" wi
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 WORKERS=${SLURM_CPUS_PER_TASK:-8}
 STEM=$(basename "$PROMPTS" .json)
+DECOR=()
+if [ -n "${DECOR_DIRS:-}" ]; then
+    DECOR=(--decor_dirs "$DECOR_DIRS" --decor_mode "${DECOR_MODE:-replace}")
+    [ -n "${DECOR_ROWS:-}" ] && DECOR+=(--decor_rows $DECOR_ROWS)
+    STEM=${STEM}_dd${DECOR_MODE:-replace}${DECOR_ROWS:+-r${DECOR_ROWS// /}}
+fi
 RECIPE=(--runs repulse_only --repulse whitened --lambda_repulse 10 --group_reweight pseudo
-        --no_lambda_schedules --seeds "$SEED" --extra_prompts "$PROMPTS")
+        --no_lambda_schedules --seeds "$SEED" --extra_prompts "$PROMPTS" "${DECOR[@]}")
 
 RUN="uv run --locked python"
 $RUN -c "import numpy, torch, sys; print(sys.executable); print('numpy', numpy.__version__); print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"

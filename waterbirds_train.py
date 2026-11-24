@@ -57,7 +57,12 @@ from clip_debias.config import (
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
 from clip_debias.results_io import append_result
-from clip_debias.discovery import load_core_dirs, load_prompt_file, prompt_directions
+from clip_debias.discovery import (
+    load_core_dirs,
+    load_prompt_file,
+    prompt_directions,
+    load_direction_file,
+)
 from clip_debias.baselines import (
     add_baseline_args,
     apply_baseline_args,
@@ -346,6 +351,22 @@ def parse_args():
         "Adds an '_xp-<file stem>' suffix.",
     )
     parser.add_argument(
+        "--decor_dirs",
+        default=None,
+        help="error directions from discover_biases.py (<out>_dirs.npz) for the "
+        "decorrelation term: the whitened concept scores come from them instead "
+        "of (replace) or as well as (add) the prompt subspace.  Pseudo-groups "
+        "still come from the prompts.  Adds '_dd<mode>-<file stem>'.",
+    )
+    parser.add_argument(
+        "--decor_rows",
+        type=int,
+        nargs="+",
+        default=None,
+        help="rows of --decor_dirs to use (default: all)",
+    )
+    parser.add_argument("--decor_mode", default="replace", choices=["replace", "add"])
+    parser.add_argument(
         "--core_dirs",
         default=None,
         help="JSON file from discover_core.py: its accepted core directions are "
@@ -442,6 +463,16 @@ def main():
         oracle, prompt_pairs, k=args.concept_subspace_k
     )
     print(f"  subspace shape: {tuple(subspace.shape)}")
+    if args.decor_dirs:
+        dd = load_direction_file(args.decor_dirs, args.decor_rows)
+        if args.decor_mode == "add":
+            q, _ = torch.linalg.qr(torch.cat([subspace.float().cpu(), dd]).T)
+            dd = q.T.contiguous()
+        subspace = dd.to(subspace.dtype)
+        print(
+            f"  decorrelation subspace from {args.decor_dirs} ({args.decor_mode}): "
+            f"{tuple(subspace.shape)}"
+        )
 
     # ── Val pseudo-labels: label-free checkpoint selection (best_pseudo_wga.pt) ─
     print("\nEmbedding the val split with CLIP …")
@@ -565,6 +596,8 @@ def main():
                 cfg.prompt_pairs = [[list(p), list(n)] for p, n in prompt_pairs]
             if args.extra_prompts:
                 cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
+            if args.decor_dirs:
+                cfg.run_name += f"_dd{args.decor_mode}-" + Path(args.decor_dirs).stem
             if args.prompts != "words":
                 cfg.run_name += f"_p{args.prompts}"
             if args.clip_model != DebiasingConfig.clip_model:
