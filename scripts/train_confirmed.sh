@@ -28,6 +28,9 @@
 #          uses these error directions (DECOR_MODE replace, the default) or the
 #          prompt subspace plus them (add); DECOR_ROWS picks rows (e.g. "0").
 #          Pseudo-groups still come from PROMPTS.  Runs go to their own folder.
+# CELEBA_PROMPTED  CelebA library prompts trained alongside PROMPTS (default
+#          "Young"; "" = the discovered pairs only, evaluated over the 4
+#          Blond x Male groups like the main table).  Runs go to their own folder.
 #
 # Submit from the repo root:
 #   mkdir -p logs
@@ -77,10 +80,17 @@ if [ "$DATASET" = wb ]; then
     $RUN eval_checkpoints.py "$CKPT_DIR"/*/seed_"$SEED" --out "$RESULTS_DIR/eval_summary.csv"
 elif [ "$DATASET" = celeba ]; then
     : "${CELEBA_ROOT:?set CELEBA_ROOT to the directory containing celeba/ when submitting}"
+    PROMPTED=${CELEBA_PROMPTED-Young}
+    if [ -n "$PROMPTED" ]; then
+        ATTRS=(--extra_concept_attrs $PROMPTED --prompt_attrs $PROMPTED)
+    else
+        ATTRS=(--prompt_attrs)   # nothing hand-prompted
+    fi
+    [ "$PROMPTED" = Young ] || STEM=${STEM}_pa-${PROMPTED:-none}
     CKPT_DIR=./checkpoints/confirmed_${STEM}
     RESULTS_DIR=./results/confirmed_${STEM}/seed_${SEED}
     $RUN train.py "${RECIPE[@]}" --celeba_root "$CELEBA_ROOT" --target_attr Blond_Hair \
-        --concept_attr Male --extra_concept_attrs Young --prompt_attrs Young \
+        --concept_attr Male "${ATTRS[@]}" \
         --epochs 10 --batch_size 128 --concept_subspace_k 9 --num_workers "$WORKERS" \
         --checkpoint_dir "$CKPT_DIR" --results_dir "$RESULTS_DIR"
     $RUN eval_checkpoints.py "$CKPT_DIR"/*/seed_"$SEED" --celeba_root "$CELEBA_ROOT" \
