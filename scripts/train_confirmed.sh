@@ -29,7 +29,7 @@
 #          prompt subspace plus them (add); DECOR_ROWS picks rows (e.g. "0").
 #          Pseudo-groups still come from PROMPTS.  Runs go to their own folder.
 # CELEBA_PROMPTED  CelebA library prompts trained alongside PROMPTS (default
-#          "Young"; "" = the discovered pairs only, evaluated over the 4
+#          "Young"; "none" (or "") = the discovered pairs only, evaluated over the 4
 #          Blond x Male groups like the main table).  Runs go to their own folder.
 #
 # Submit from the repo root:
@@ -81,6 +81,7 @@ if [ "$DATASET" = wb ]; then
 elif [ "$DATASET" = celeba ]; then
     : "${CELEBA_ROOT:?set CELEBA_ROOT to the directory containing celeba/ when submitting}"
     PROMPTED=${CELEBA_PROMPTED-Young}
+    [ "$PROMPTED" = none ] && PROMPTED=""
     if [ -n "$PROMPTED" ]; then
         ATTRS=(--extra_concept_attrs $PROMPTED --prompt_attrs $PROMPTED)
     else
