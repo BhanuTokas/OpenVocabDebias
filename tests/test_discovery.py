@@ -14,6 +14,7 @@ from clip_debias.discovery import (
     load_direction_file,
     name_by_cosine,
     remove_class_direction,
+    target_filter,
     load_vocabulary,
     residual_scores,
 )
@@ -165,3 +166,25 @@ def test_load_direction_file_is_orthonormal(tmp_path):
     assert torch.allclose(q @ q.T, torch.eye(3), atol=1e-5)
     one = load_direction_file(str(f), rows=[1])
     assert one.shape == (1, 16) and abs(float(one[0] @ d[1])) > 0.999
+
+
+def test_target_filter_drops_class_words_and_class_phrases():
+    # the place b agrees with the class a on 90% of examples; three phrases:
+    # one reading b (a background), one reading a (a species), one named "bird"
+    g = torch.Generator().manual_seed(0)
+    D, n = 16, 4000
+    a, b = torch.eye(D)[0], torch.eye(D)[1]
+    y = np.random.default_rng(0).integers(0, 2, n)
+    place = np.where(np.random.default_rng(1).random(n) < 0.9, y, 1 - y)
+    v = torch.randn(n, D, generator=g) * 0.3
+    v += torch.as_tensor(2.0 * y - 1)[:, None].float() * a
+    v += torch.as_tensor(2.0 * place - 1)[:, None].float() * b
+    z = v @ b + 0.3 * torch.randn(n, generator=g)  # the direction reads the place
+    # plus neutral phrases, so that centring the vocabulary changes little
+    vocab = ["ocean", "pelican", "sea bird"] + [f"other {i}" for i in range(8)]
+    text = torch.cat([torch.stack([b, a, b]), torch.eye(D)[4:12]])
+    keep, dropped = target_filter(vocab, text, v, z, y, ["bird"])
+    assert keep[:3].tolist() == [True, False, False]
+    assert {d["phrase"]: d["reason"] for d in dropped}["sea bird"].startswith("names")
+    keep2, _ = target_filter(vocab, text, v, z, y, [], partial=False)
+    assert keep2.all()

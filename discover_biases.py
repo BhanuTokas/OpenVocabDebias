@@ -72,6 +72,7 @@ from clip_debias.discovery import (
     remove_class_direction,
     load_vocabulary,
     name_scores,
+    target_filter,
     vocabulary,
 )
 from clip_debias.evaluate import extract_features
@@ -128,6 +129,28 @@ def parse_args():
         help="with --report_truth: also name and score each direction with the "
         "text embeddings left uncentred, by text-cosine retrieval (centred and "
         "not), and from a plain projection score instead of the whitened one",
+    )
+    p.add_argument(
+        "--target_words",
+        nargs="+",
+        default=[],
+        help="drop vocabulary phrases with a word starting with one of these "
+        "(the class names, e.g. bird / blond hair) before naming",
+    )
+    p.add_argument(
+        "--target_filter",
+        action="store_true",
+        help="also drop, per direction, phrases whose zero-shot score follows "
+        "the class beyond the direction more than the direction within a class "
+        "(clip_debias.discovery.target_filter); for caption vocabularies",
+    )
+    p.add_argument(
+        "--accept_class",
+        type=int,
+        nargs="+",
+        default=[],
+        help='mark the proposals of these classes "accept": true (for runs '
+        "trained straight from the file without a manual review)",
     )
     p.add_argument("--n_phrases", type=int, default=5)
     p.add_argument("--out", default="proposals.json")
@@ -299,13 +322,20 @@ def main():
     v_mean = v.float().mean(0)
     proposals = []
     for j, k in enumerate(classes):
-        pos, neg = name_scores(oracle, vocab, v, z[:, j], n=args.n_phrases, text=text)
+        keep, dropped = None, []
+        if args.target_words or args.target_filter:
+            keep, dropped = target_filter(
+                vocab, text, v, z[:, j], y_all, args.target_words, args.target_filter
+            )
+        pos, neg = name_scores(
+            oracle, vocab, v, z[:, j], n=args.n_phrases, text=text, keep=keep
+        )
         entry = dict(
             name=f"discovered_class{k}"
             + (f"_c{cluster_ids[j]}" if args.clusters > 1 else ""),
             pos=[as_prompt(p) for p, _ in pos],
             neg=[as_prompt(p) for p, _ in neg],
-            accept=False,
+            accept=int(k) in args.accept_class,
             **{"class": k},
             cluster=cluster_ids[j],
             n_errors=sizes[j],
@@ -315,12 +345,20 @@ def main():
                 corr_y=round(float(np.corrcoef(z[:, j], y_all)[0, 1]), 3),
             ),
         )
+        if keep is not None:
+            entry["filtered"] = dropped
         print(
             f"\n  direction from class {k} errors, cluster {cluster_ids[j]} "
             f"({sizes[j]} errors)   corr(score, y) {entry['scores']['corr_y']:+.2f}"
         )
         print("    + " + ", ".join(f"{p} ({s:+.2f})" for p, s in pos))
         print("    − " + ", ".join(f"{p} ({s:+.2f})" for p, s in neg))
+        if keep is not None:
+            print(
+                f"    target filter dropped {len(dropped)} / {len(vocab)} phrases: "
+                + ", ".join(d["phrase"] for d in dropped[:40])
+                + (" ..." if len(dropped) > 40 else "")
+            )
         if args.report_truth:
             n_attr = 1 + len(cfg.extra_concept_attrs)
             names = [cfg.concept_attr] + list(cfg.extra_concept_attrs)

@@ -301,19 +301,84 @@ def name_scores(
     n: int = 5,
     text: torch.Tensor | None = None,
     center: bool = True,
+    keep: np.ndarray | None = None,
 ) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
     """Phrases whose zero-shot image scores correlate most positively and most
     negatively with the score z (N,).  The text embeddings are mean-centred over
-    the vocabulary first unless center=False; `text` reuses an encoding."""
+    the vocabulary first unless center=False; `text` reuses an encoding; only
+    phrases with keep True (default all) are ranked."""
     t = text if text is not None else encode_vocab(oracle, vocab)
     s = v.float() @ (t - t.mean(0) if center else t).T
     s = (s - s.mean(0)) / (s.std(0) + 1e-8)
     zz = (z.float() - z.float().mean()) / (z.float().std() + 1e-8)
     c = (s * zz[:, None]).mean(0).numpy()
     order = np.argsort(-c)
+    if keep is not None:
+        order = order[np.asarray(keep, bool)[order]]
     pos = [(vocab[i], float(c[i])) for i in order[:n]]
     neg = [(vocab[i], float(c[i])) for i in order[::-1][:n]]
     return pos, neg
+
+
+def _residual(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Columns of a (N, P) minus their least-squares fit on b (N,) and a constant."""
+    a = a - a.mean(0)
+    b = b - b.mean()
+    return a - b[:, None] * (b @ a) / (b @ b + 1e-12)
+
+
+def _corr(a: torch.Tensor, b: torch.Tensor) -> np.ndarray:
+    a = (a - a.mean(0)) / (a.std(0) + 1e-8)
+    b = (b - b.mean()) / (b.std() + 1e-8)
+    return (a * b[:, None]).mean(0).numpy()
+
+
+def target_filter(
+    vocab: List[str],
+    text: torch.Tensor,
+    v: torch.Tensor,
+    z: torch.Tensor,
+    y: np.ndarray,
+    words: List[str] = (),
+    partial: bool = True,
+) -> Tuple[np.ndarray, List[dict]]:
+    """Which phrases may name the bias direction scored by z (N,) rather than
+    the target y (N,), which captions name freely ("pelican", "blonde woman").
+
+    A phrase is dropped if one of its words starts with one of `words` (the
+    class names, e.g. "bird", "blond"), and, with partial=True, if its centred
+    zero-shot score follows the class beyond the direction more than it follows
+    the direction within a class: |pcorr(s, y | z)| > |pcorr(s, z | y)|.  A
+    background phrase ("ocean") tracks z inside each class; a species name
+    ("pelican") mostly separates the classes.  Returns the keep mask and, per
+    dropped phrase, why."""
+    words = [w.lower() for w in words]
+    s = v.float() @ (text - text.mean(0)).T
+    yy = torch.as_tensor(np.asarray(y), dtype=torch.float32)
+    zz = z.float()
+    # partial correlations, by residualising both sides on the third variable
+    p_y = _corr(_residual(s, zz), _residual(yy[:, None], zz)[:, 0])
+    p_z = _corr(_residual(s, yy), _residual(zz[:, None], yy)[:, 0])
+    keep = np.ones(len(vocab), bool)
+    dropped = []
+    for i, p in enumerate(vocab):
+        hit = [w for w in words if any(t.startswith(w) for t in p.lower().split())]
+        if hit:
+            reason = "names the class (" + hit[0] + ")"
+        elif partial and abs(p_y[i]) > abs(p_z[i]):
+            reason = "follows the class"
+        else:
+            continue
+        keep[i] = False
+        dropped.append(
+            dict(
+                phrase=p,
+                reason=reason,
+                pcorr_y=round(float(p_y[i]), 3),
+                pcorr_z=round(float(p_z[i]), 3),
+            )
+        )
+    return keep, dropped
 
 
 def encode_vocab(oracle: CLIPOracle, vocab: List[str]) -> torch.Tensor:
