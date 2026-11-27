@@ -31,6 +31,7 @@ from clip_debias.clip_oracle import (
     compute_multi_concept_subspace,
     embed_dataset,
     fit_leace_eraser,
+    fit_zeroshot_cutoff,
     fit_zeroshot_cutoffs,
     whitened_concept_scores,
     zeroshot_concept_codes,
@@ -50,7 +51,12 @@ from clip_debias.config import (
     use_group_reweighting,
     get_concept_prompts,
 )
-from clip_debias.discovery import load_prompt_file, load_direction_file
+from clip_debias.discovery import (
+    load_prompt_file,
+    direction_codes,
+    load_direction_file,
+    load_direction_rows,
+)
 from clip_debias.data import build_dataloaders
 from clip_debias.evaluate import run_evaluation
 from clip_debias.models import build_model
@@ -171,6 +177,22 @@ def parse_args():
         help="rows of --decor_dirs to use (default: all)",
     )
     parser.add_argument("--decor_mode", default="replace", choices=["replace", "add"])
+    parser.add_argument(
+        "--dir_concepts",
+        default=None,
+        help="error directions from discover_biases.py (<out>_dirs.npz) used as "
+        "concepts in place of named prompts: each is added to the decorrelation "
+        "subspace, and its CLIP projection, cut where a 2-component mixture "
+        "fitted on train splits it, is a pseudo-concept bit.  Adds "
+        "'_dc-<file stem>'.",
+    )
+    parser.add_argument(
+        "--dir_rows",
+        type=int,
+        nargs="+",
+        default=None,
+        help="rows of --dir_concepts to use (default: all)",
+    )
     parser.add_argument(
         "--extra_concept_attrs",
         nargs="*",
@@ -352,7 +374,7 @@ def main():
         print(f"  + {len(extra)} confirmed prompt pair(s) from {args.extra_prompts}:")
         for pos, neg in extra:
             print(f"      {pos}  vs  {neg}")
-    if not prompt_pairs:
+    if not prompt_pairs and not args.dir_concepts:
         raise SystemExit(
             "no concept prompts: pass --prompt_attrs and/or --extra_prompts"
         )
@@ -400,10 +422,29 @@ def main():
         clip_embed_dim=oracle.embed_dim, proj_out_dim=oracle.embed_dim
     )
     print(f"Computing concept subspace (k={args.concept_subspace_k}) …")
-    subspace = compute_multi_concept_subspace(
-        oracle, prompt_pairs, k=args.concept_subspace_k
+    subspace = (
+        compute_multi_concept_subspace(oracle, prompt_pairs, k=args.concept_subspace_k)
+        if prompt_pairs
+        else None
     )
+    dir_c = dir_cuts = None
+    if args.dir_concepts:
+        dir_c = load_direction_rows(args.dir_concepts, args.dir_rows)
+        parts = [subspace.float().cpu()] if subspace is not None else []
+        q, _ = torch.linalg.qr(torch.cat(parts + [dir_c]).T)
+        subspace = q.T.contiguous()
+        print(
+            f"  + {len(dir_c)} error direction(s) as concepts from {args.dir_concepts}"
+        )
     print(f"  subspace shape: {tuple(subspace.shape)}")
+
+    def concept_codes(v):
+        """Pseudo-concept code: prompted attributes, then the direction bits."""
+        c = zeroshot_concept_codes(oracle, prompt_pairs, v, cutoffs)
+        if dir_c is not None:
+            c = c + direction_codes(dir_c, v, dir_cuts, shift=len(prompt_pairs))
+        return c
+
     if args.decor_dirs:
         dd = load_direction_file(args.decor_dirs, args.decor_rows)
         if args.decor_mode == "add":
@@ -451,10 +492,13 @@ def main():
         if args.zs_cutoff == "gmm":
             cutoffs = fit_zeroshot_cutoffs(oracle, prompt_pairs, v_tr)
             print(f"  fitted zero-shot cutoffs (unlabeled train): {cutoffs}")
+        if dir_c is not None:
+            dir_cuts = [fit_zeroshot_cutoff(v_tr.float().cpu() @ d) for d in dir_c]
+            print(f"  fitted direction cutoffs (unlabeled train): {dir_cuts}")
         if need_eraser:
             fit_w = None
             if args.eraser_fit == "balanced":
-                c_fit = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
+                c_fit = concept_codes(v_tr)
                 fit_w = group_weights(y_tr, c_fit)
             eraser = fit_leace_eraser(v_tr, subspace, weights=fit_w)
             print(
@@ -462,7 +506,7 @@ def main():
                 f"({args.eraser_fit})"
             )
         if args.group_reweight == "pseudo" or args.group_dro == "pseudo":
-            c_hat = zeroshot_concept_codes(oracle, prompt_pairs, v_tr, cutoffs)
+            c_hat = concept_codes(v_tr)
             print(
                 "  zero-shot concept accuracy on train (reported only, not used): "
                 f"{(c_hat == c_tr).float().mean():.4f}"
@@ -478,7 +522,11 @@ def main():
     if args.error_set:
         train_weights = error_set_weights(args.error_set, args.upweight)
 
-    val_pseudo = zeroshot_concept_codes(oracle, prompt_pairs, v_va, cutoffs)
+    if dir_c is not None and dir_cuts is None:
+        raise SystemExit(
+            "--dir_concepts needs the train CLIP pass (e.g. --group_reweight pseudo)"
+        )
+    val_pseudo = concept_codes(v_va)
     print(
         "  zero-shot concept accuracy on val (reported only, not used): "
         f"{(val_pseudo == c_va).float().mean():.4f}"
@@ -524,6 +572,8 @@ def main():
                 cfg.run_name += "_xp-" + Path(args.extra_prompts).stem
             if args.decor_dirs:
                 cfg.run_name += f"_dd{args.decor_mode}-" + Path(args.decor_dirs).stem
+            if args.dir_concepts:
+                cfg.run_name += "_dc-" + Path(args.dir_concepts).stem
             if args.zs_cutoff != "zero":
                 cfg.zs_cutoff, cfg.zs_cutoffs = args.zs_cutoff, cutoffs
                 cfg.run_name += f"_zs{args.zs_cutoff}"

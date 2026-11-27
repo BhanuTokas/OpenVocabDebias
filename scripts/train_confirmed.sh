@@ -28,6 +28,10 @@
 #          uses these error directions (DECOR_MODE replace, the default) or the
 #          prompt subspace plus them (add); DECOR_ROWS picks rows (e.g. "0").
 #          Pseudo-groups still come from PROMPTS.  Runs go to their own folder.
+# DIR_CONCEPTS  optional discover_biases.py <out>_dirs.npz instead of PROMPTS: the
+#          error directions themselves are the concepts, no words at all (the
+#          decorrelation subspace and the pseudo-groups, from the CLIP projection
+#          cut by a mixture fitted on train); DIR_ROWS picks rows (e.g. "0").
 # CELEBA_PROMPTED  CelebA library prompts trained alongside PROMPTS (default
 #          "Young"; "none" (or "") = the discovered pairs only, evaluated over the 4
 #          Blond x Male groups like the main table).  Runs go to their own folder.
@@ -50,8 +54,11 @@ if [ ! -f discover_biases.py ]; then
     exit 1
 fi
 : "${DATASET:?set DATASET=wb or DATASET=celeba}"
-: "${PROMPTS:?set PROMPTS to the reviewed proposals file}"
-if ! grep -q '"accept": true' "$PROMPTS"; then
+if [ -z "${PROMPTS:-}" ] && [ -z "${DIR_CONCEPTS:-}" ]; then
+    echo "set PROMPTS to the reviewed proposals file (or DIR_CONCEPTS to a _dirs.npz)" >&2
+    exit 1
+fi
+if [ -n "${PROMPTS:-}" ] && ! grep -q '"accept": true' "$PROMPTS"; then
     echo "No accepted proposals in $PROMPTS: review it and set \"accept\": true first" >&2
     exit 1
 fi
@@ -59,7 +66,18 @@ fi
 read -ra SEEDS <<< "${SEEDS:-42 123 456}"   # override, e.g. SEEDS="789 1011" with --array=0-1
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 WORKERS=${SLURM_CPUS_PER_TASK:-8}
-STEM=$(basename "$PROMPTS" .json)
+CONCEPTS=()
+if [ -n "${PROMPTS:-}" ]; then
+    STEM=$(basename "$PROMPTS" .json)
+    CONCEPTS=(--extra_prompts "$PROMPTS")
+else
+    STEM=dirs-$(basename "$DIR_CONCEPTS" .npz)
+fi
+if [ -n "${DIR_CONCEPTS:-}" ]; then
+    CONCEPTS+=(--dir_concepts "$DIR_CONCEPTS")
+    [ -n "${DIR_ROWS:-}" ] && CONCEPTS+=(--dir_rows $DIR_ROWS)
+    STEM=${STEM}_dc${DIR_ROWS:+-r${DIR_ROWS// /}}
+fi
 DECOR=()
 if [ -n "${DECOR_DIRS:-}" ]; then
     DECOR=(--decor_dirs "$DECOR_DIRS" --decor_mode "${DECOR_MODE:-replace}")
@@ -67,7 +85,7 @@ if [ -n "${DECOR_DIRS:-}" ]; then
     STEM=${STEM}_dd${DECOR_MODE:-replace}${DECOR_ROWS:+-r${DECOR_ROWS// /}}
 fi
 RECIPE=(--runs repulse_only --repulse whitened --lambda_repulse 10 --group_reweight pseudo
-        --no_lambda_schedules --seeds "$SEED" --extra_prompts "$PROMPTS" "${DECOR[@]}")
+        --no_lambda_schedules --seeds "$SEED" "${CONCEPTS[@]}" "${DECOR[@]}")
 
 RUN="uv run --locked python"
 $RUN -c "import numpy, torch, sys; print(sys.executable); print('numpy', numpy.__version__); print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"

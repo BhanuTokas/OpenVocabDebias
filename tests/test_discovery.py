@@ -10,7 +10,9 @@ from clip_debias.discovery import (
     as_prompt,
     direction_scores,
     cluster_error_directions,
+    direction_codes,
     error_directions,
+    load_direction_rows,
     load_direction_file,
     name_by_cosine,
     remove_class_direction,
@@ -188,3 +190,17 @@ def test_target_filter_drops_class_words_and_class_phrases():
     assert {d["phrase"]: d["reason"] for d in dropped}["sea bird"].startswith("names")
     keep2, _ = target_filter(vocab, text, v, z, y, [], partial=False)
     assert keep2.all()
+
+
+def test_direction_codes_split_on_the_planted_bias(tmp_path):
+    v, y, err, b = planted()
+    dirs, _ = error_directions(v, y, err)
+    f = tmp_path / "x_dirs.npz"
+    np.savez(f, dirs=dirs.numpy(), classes=np.array([0, 1]))
+    d = load_direction_rows(str(f), rows=[0])
+    assert d.shape == (1, v.shape[1])
+    code = direction_codes(d, v, [float((v @ d[0]).median())], shift=1)
+    assert set(code.unique().tolist()) == {0, 2}
+    side = (v @ b > 0).long()
+    agree = (((code >> 1) & 1) == side).float().mean()
+    assert max(agree, 1 - agree) > 0.9

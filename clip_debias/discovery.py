@@ -508,6 +508,26 @@ def load_direction_file(path: str, rows: List[int] | None = None) -> torch.Tenso
     return q.T.contiguous()
 
 
+def load_direction_rows(path: str, rows: List[int] | None = None) -> torch.Tensor:
+    """Unit error directions (r, D) saved by discover_biases.py, as they are
+    (not orthonormalised: each is a concept of its own)."""
+    d = torch.as_tensor(np.load(path)["dirs"]).float()
+    if rows:
+        d = d[rows]
+    return F.normalize(d, dim=-1)
+
+
+def direction_codes(
+    dirs: torch.Tensor, v: torch.Tensor, cutoffs: List[float], shift: int = 0
+) -> torch.Tensor:
+    """Pseudo-concept code from error directions instead of prompts: bit
+    shift + j is 1 where the CLIP projection on dirs[j] exceeds cutoffs[j]."""
+    code = torch.zeros(len(v), dtype=torch.long)
+    for j, d in enumerate(dirs):
+        code += ((v.float().cpu() @ d) > cutoffs[j]).long() << (shift + j)
+    return code
+
+
 def load_core_dirs(path: str) -> torch.Tensor:
     """Accepted core directions (r, D) from a discover_core.py file."""
     with open(path) as f:
